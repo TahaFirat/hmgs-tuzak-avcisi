@@ -74,7 +74,7 @@ jobs:
           PROFILE_FILE=$(ls ios/App/*.mobileprovision apple_certs/*.mobileprovision 2>/dev/null | head -n 1 || true)
           if [ -z "$PROFILE_FILE" ] && [ -n "$APP_STORE_CONNECT_API_KEY" ] && [ -n "$APP_STORE_CONNECT_ISSUER_ID" ]; then
             echo "Auto-provisioning Bundle ID & App Store Profile via App Store Connect API..."
-            pip3 install --quiet pyjwt cryptography requests
+            pip3 install --break-system-packages --quiet pyjwt cryptography requests || pip3 install --user --quiet pyjwt cryptography requests
             python3 - << 'PYEOF'
           import os, re, time, base64, jwt, requests
 
