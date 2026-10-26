@@ -181,12 +181,12 @@ export function App() {
     const onNativeNav = (event: Event) => {
       const detail = (event as CustomEvent<Record<string, string>>).detail;
       if (!detail) return;
-      if (detail.category) {
-        setSelectedCategory(detail.category as 'ALL' | StatuteCategory);
+      if (detail.category && detail.category !== 'ALL') {
+        setSelectedFilter(detail.category as FilterPillCategory);
       }
       if (detail.tab) {
         setSpacedRepetitionSessionIds(null);
-        setActiveTab(detail.tab as NavigationTab);
+        setActiveTab(detail.tab as ActiveTab);
       }
     };
     window.addEventListener('hmgs:nativeNavigation', onNativeNav);
