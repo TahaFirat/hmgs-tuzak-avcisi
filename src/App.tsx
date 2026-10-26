@@ -176,6 +176,23 @@ export function App() {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
+  // Native iOS Home Screen Quick Actions & CoreSpotlight yönlendiricisi
+  useEffect(() => {
+    const onNativeNav = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, string>>).detail;
+      if (!detail) return;
+      if (detail.category) {
+        setSelectedCategory(detail.category as 'ALL' | StatuteCategory);
+      }
+      if (detail.tab) {
+        setSpacedRepetitionSessionIds(null);
+        setActiveTab(detail.tab as NavigationTab);
+      }
+    };
+    window.addEventListener('hmgs:nativeNavigation', onNativeNav);
+    return () => window.removeEventListener('hmgs:nativeNavigation', onNativeNav);
+  }, []);
+
   const isDark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark);
 
   useEffect(() => {
