@@ -31,7 +31,7 @@ import { checkProStatusNatively } from './utils/audioFeedback';
 
 type ActiveTab = 'home' | 'antrenman' | 'deneme' | 'analiz' | 'defterim' | 'ayarlar';
 
-const FREE_QUESTION_LIMIT = 60;
+const FREE_QUESTION_LIMIT = 30;
 
 const STORAGE_KEYS = {
   VAULT: 'hmgs_vault_v6',
@@ -300,7 +300,7 @@ export function App() {
     const solvedCountNow = Object.keys(solvedCardMap).length;
     if (!isPro && solvedCountNow >= FREE_QUESTION_LIMIT && !(card.id in solvedCardMap)) {
       openPaywall(
-        `${FREE_QUESTION_LIMIT} soruluk ücretsiz deneme kotanızı tamamladınız! Tüm ${cards.length}+ kanun maddesi tuzağına ve deneme sınavlarına sınırsız devam etmek için Ömür Boyu Tam Erişim (99,99 ₺) paketini açın.`
+        `${FREE_QUESTION_LIMIT} soruluk ücretsiz deneme kotanızı tamamladınız! Tüm ${cards.length}+ kanun maddesi tuzağına ve deneme sınavlarına sınırsız devam etmek için Ömür Boyu Tam Erişim (49,99 ₺) paketini açın.`
       );
       return;
     }
@@ -311,7 +311,7 @@ export function App() {
     if (!isPro && solvedCountNow + 1 === FREE_QUESTION_LIMIT && !(card.id in solvedCardMap)) {
       setTimeout(() => {
         openPaywall(
-          `Tebrikler, ilk ${FREE_QUESTION_LIMIT} soruyu tamamladınız! Kalan tüm kanun maddesi tuzaklarına ve tam kapsamlı deneme sınavlarına sınırsız erişmek için Ömür Boyu Tam Erişim (99,99 ₺) paketine geçebilirsiniz.`
+          `Tebrikler, ilk ${FREE_QUESTION_LIMIT} soruyu tamamladınız! Kalan tüm kanun maddesi tuzaklarına ve tam kapsamlı deneme sınavlarına sınırsız erişmek için Ömür Boyu Tam Erişim (49,99 ₺) paketine geçebilirsiniz.`
         );
       }, 900);
     }
@@ -650,7 +650,7 @@ export function App() {
                 <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
                   {isPro
                     ? 'Sınırsız soru & deneme'
-                    : `Ücretsiz: ${Math.min(Object.keys(solvedCardMap).length, FREE_QUESTION_LIMIT)}/${FREE_QUESTION_LIMIT} • 99,99 ₺`}
+                    : `Ücretsiz: ${Math.min(Object.keys(solvedCardMap).length, FREE_QUESTION_LIMIT)}/${FREE_QUESTION_LIMIT} • 49,99 ₺`}
                 </div>
               </div>
             </div>
@@ -756,6 +756,9 @@ export function App() {
               onAnswerCard={handleAnswerCard}
               onToggleBookmark={handleToggleBookmark}
               onGoToExam={() => setActiveTab('deneme')}
+              isPro={isPro}
+              freeLimit={FREE_QUESTION_LIMIT}
+              onOpenPaywall={openPaywall}
               defaultShowHighlights={settings.showHighlights}
               simpleMode={settings.simpleMode}
               soundEnabled={settings.soundEnabled}
@@ -766,6 +769,8 @@ export function App() {
             <DenemeSinavScreen
               cards={examCards}
               solvedCardMap={solvedCardMap}
+              isPro={isPro}
+              onOpenPaywall={openPaywall}
               onRecordAnswer={(card, isUserRight) =>
                 handleAnswerCard(card, isUserRight ? card.isCorrect : !card.isCorrect, isUserRight)
               }

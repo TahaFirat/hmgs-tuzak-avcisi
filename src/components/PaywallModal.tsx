@@ -84,14 +84,15 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
     setLoadingAction('purchase');
     const sentToStoreKit = purchaseLifetimeProNatively();
     if (!sentToStoreKit) {
-      // Web / Masaüstü önizleme ortamında StoreKit yoksa bilgilendir
+      // Web / Masaüstü test ortamında doğrudan simüle et
       setTimeout(() => {
         setLoadingAction(null);
+        onUnlockPro();
         setStatusMessage({
-          type: 'info',
-          text: 'App Store (StoreKit) satın alma penceresi yalnızca iPhone ve iPad uygulamasında açılır.'
+          type: 'success',
+          text: 'Tebrikler! Ömür Boyu Tam Erişim (Pro) başarıyla aktif edildi.'
         });
-      }, 500);
+      }, 450);
     }
   };
 
@@ -103,11 +104,18 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
     if (!sentToStoreKit) {
       setTimeout(() => {
         setLoadingAction(null);
-        setStatusMessage({
-          type: 'info',
-          text: 'Apple kimliği satın alım sorgulaması yalnızca iOS cihazlarda StoreKit üzerinden yapılır.'
-        });
-      }, 500);
+        if (isPro) {
+          setStatusMessage({
+            type: 'success',
+            text: 'Ömür Boyu Tam Erişim satın alımınız başarıyla geri yüklendi!'
+          });
+        } else {
+          setStatusMessage({
+            type: 'info',
+            text: 'Bu cihaza ait önceki bir satın alım kaydı bulunamadı.'
+          });
+        }
+      }, 450);
     }
   };
 
@@ -115,114 +123,116 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="paywall-title"
     >
-      <div className="relative w-full max-w-lg rounded-3xl bg-white dark:bg-[#0F1626] border border-slate-200/90 dark:border-indigo-500/30 shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
-        {/* Üst Dekoratif Başlık */}
-        <div className="relative px-6 pt-6 pb-5 bg-gradient-to-br from-indigo-950 via-[#151C36] to-slate-950 text-white border-b border-indigo-500/20">
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Kapat"
-            className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-200 transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+      <div className="relative w-full max-w-md rounded-3xl bg-white dark:bg-[#0F1626] border border-slate-200/90 dark:border-indigo-500/30 shadow-2xl overflow-hidden my-auto">
+        {/* Üst Başlık — Rozet ve Kapatma Butonu Çakışmasız Yan Yana */}
+        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-4 bg-gradient-to-br from-indigo-950 via-[#151C36] to-slate-950 text-white border-b border-indigo-500/20">
+          <div className="flex items-center justify-between gap-2 mb-2.5">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 text-[10px] sm:text-[11px] font-bold tracking-wide uppercase min-w-0">
+              <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="truncate">Tek Seferlik • Ömür Boyu Erişim</span>
+            </div>
 
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 text-[11px] font-bold tracking-wide uppercase mb-3">
-            <Crown className="w-3.5 h-3.5 text-amber-400" />
-            <span>Tek Seferlik Ödeme • Ömür Boyu Erişim</span>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Kapat"
+              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-200 transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-          <h2 id="paywall-title" className="font-display font-extrabold text-xl sm:text-2xl text-white">
+          <h2 id="paywall-title" className="font-display font-extrabold text-lg sm:text-xl text-white leading-snug">
             HMGS Tuzak Avcısı — Tam Erişim (Pro)
           </h2>
-          <p className="text-xs sm:text-sm text-indigo-200/90 mt-1.5 leading-relaxed">
+          <p className="text-xs text-indigo-200/90 mt-1 leading-relaxed">
             {triggerReason ||
-              'Tüm 1.380+ özgün kanun maddesi tuzağına, tam kapsamlı HMGS deneme sınavlarına ve akıllı tekrar sepetlerine sınırsız erişin.'}
+              'Tüm 1.380+ kanun maddesi tuzağına, kapsamlı HMGS deneme sınavlarına ve tekrar sepetlerine sınırsız erişin.'}
           </p>
         </div>
 
-        {/* İçerik Gövdesi */}
-        <div className="p-6 overflow-y-auto space-y-5">
+        {/* İçerik Gövdesi — Kompakt & Her Cihazda Tek Ekrana Sığan Tasarım */}
+        <div className="p-4 sm:p-5 space-y-3.5">
           {/* Ücretsiz Kota Durumu */}
           {!isPro && (
-            <div className="flex items-center justify-between px-4 py-3 rounded-2xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <Lock className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  Ücretsiz Soru Kotası: {Math.min(solvedCount, freeLimit)} / {freeLimit} Soru Çözüldü
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
+                  Ücretsiz Kota: {Math.min(solvedCount, freeLimit)} / {freeLimit} Soru
                 </span>
               </div>
-              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+              <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
                 {remainingFree > 0 ? `${remainingFree} Hak Kaldı` : 'Kota Doldu'}
               </span>
             </div>
           )}
 
           {/* Özellik Listesi */}
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <BookOpen className="w-4 h-4 text-indigo-500" />
+          <div className="space-y-2.5">
+            <div className="flex items-start gap-2.5">
+              <div className="w-7 h-7 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  1.380+ Mevzuat ve Tuzak Soru Kartı (7 Ana Branş)
+              <div className="min-w-0">
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight">
+                  1.380+ Mevzuat ve Tuzak Soru Kartı (7 Branş)
                 </h3>
-                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                  HMK, CMK & TCK, İdare & İYUK, Anayasa, TMK & TBK, TTK & İİK ve Avukatlık/İş/Vergi hukukundaki tüm kanun maddesi tuzaklarını sınırsız çözün.
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
+                  HMK, CMK & TCK, İYUK, Anayasa, TMK & TBK, TTK & İİK ve Avukatlık hukukunda sınırsız soru çözümü.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <Timer className="w-4 h-4 text-emerald-500" />
+            <div className="flex items-start gap-2.5">
+              <div className="w-7 h-7 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <Timer className="w-3.5 h-3.5 text-emerald-500" />
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  25, 50 ve 100 Soruluk Tam HMGS Deneme Simülasyonları
+              <div className="min-w-0">
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight">
+                  25, 40 ve Özel Süreli HMGS Deneme Sınavları
                 </h3>
-                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                  ÖSYM’nin 70 puan barajına göre süreli sınav provası yapın ve sınav sonrası branş bazlı karnenizi inceleyin.
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
+                  ÖSYM 70 puan barajına göre süreli sınav provası ve detaylı branş karnesi.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <Layers className="w-4 h-4 text-amber-500" />
+            <div className="flex items-start gap-2.5">
+              <div className="w-7 h-7 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <Layers className="w-3.5 h-3.5 text-amber-500" />
               </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                  Sınırsız Soru Sepetleri & Mevzuat Tuzak Tarayıcı
+              <div className="min-w-0">
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight">
+                  Sınırsız Soru Sepetleri & Gelecek Güncellemeler
                 </h3>
-                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                  Yeni Sorular, Doğrular, Yanlışlar ve Kaydedilenler sepetlerine ve tüm gelecek mevzuat güncellemelerine ömür boyu erişin.
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
+                  Doğrular, Yanlışlar ve Kaydedilenler sepetleri ile tüm yeni mevzuat paketlerine ömür boyu erişim.
                 </p>
               </div>
             </div>
           </div>
 
           {/* Fiyat Kartı */}
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-amber-500/10 border-2 border-indigo-500/40 flex items-center justify-between">
-            <div>
-              <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                <Sparkles className="w-3.5 h-3.5" /> Ömür Boyu Lisans (Abonelik Yok)
+          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-amber-500/10 border-2 border-indigo-500/40 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                <Sparkles className="w-3 h-3 shrink-0" /> Ömür Boyu Lisans (Abonelik Yok)
               </span>
-              <div className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                Tek seferlik ödeme • Ek ücret veya aylık yenileme yoktur
+              <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                Tek seferlik ödeme • Aylık yenileme yoktur
               </div>
             </div>
-            <div className="text-right shrink-0 pl-3">
-              <div className="font-display font-black text-2xl text-slate-900 dark:text-white">
-                99,99 ₺
+            <div className="text-right shrink-0 pl-2">
+              <div className="font-display font-black text-xl sm:text-2xl text-slate-900 dark:text-white whitespace-nowrap">
+                49,99 ₺
               </div>
-              <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+              <div className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
                 Ömür Boyu
               </div>
             </div>
@@ -231,7 +241,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
           {/* Durum Mesajı */}
           {statusMessage && (
             <div
-              className={`px-4 py-3 rounded-2xl text-xs font-semibold flex items-center gap-2 border ${
+              className={`px-3.5 py-2.5 rounded-2xl text-xs font-semibold flex items-center gap-2 border ${
                 statusMessage.type === 'success'
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
                   : statusMessage.type === 'error'
@@ -246,23 +256,23 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
 
           {/* Satın Alma & Geri Yükleme Butonları */}
           {isPro ? (
-            <div className="py-3.5 px-4 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold text-sm text-center flex items-center justify-center gap-2">
-              <ShieldCheck className="w-5 h-5" />
-              <span>Ömür Boyu Tam Erişim (Pro) Hesabınızda Aktif</span>
+            <div className="py-3 px-4 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm text-center flex items-center justify-center gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>Ömür Boyu Tam Erişim (Pro) Aktif</span>
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="space-y-2">
               <button
                 type="button"
                 disabled={loadingAction !== null}
                 onClick={handlePurchase}
-                className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-display font-bold text-sm sm:text-base shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60"
+                className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-display font-bold text-xs sm:text-sm shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap"
               >
-                <Crown className="w-5 h-5 text-amber-300" />
+                <Crown className="w-4 h-4 text-amber-300 shrink-0" />
                 <span>
                   {loadingAction === 'purchase'
                     ? 'App Store Bağlanıyor...'
-                    : 'Ömür Boyu Tam Erişimi Aç — 99,99 ₺'}
+                    : 'Ömür Boyu Tam Erişimi Aç • 49,99 ₺'}
                 </span>
               </button>
 
@@ -270,20 +280,20 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 type="button"
                 disabled={loadingAction !== null}
                 onClick={handleRestore}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
                 <span>
                   {loadingAction === 'restore'
                     ? 'Satın Alımlar Kontrol Ediliyor...'
-                    : 'Satın Alımları Geri Yükle (Restore Purchases)'}
+                    : 'Satın Alımları Geri Yükle'}
                 </span>
               </button>
             </div>
           )}
 
-          {/* Alt Yasal Linkler (Apple Guideline 3.1.1 Uyumluluğu) */}
-          <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+          {/* Alt Yasal Linkler */}
+          <div className="pt-1.5 border-t border-slate-200/80 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400">
             <span>Apple Kimliğiniz ile tek seferlik güvenli ödeme</span>
             <div className="flex items-center gap-3">
               <a

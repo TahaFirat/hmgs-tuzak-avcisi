@@ -37,6 +37,8 @@ interface DenemeSinavScreenProps {
   cards: TrapCard[];
   solvedCardMap: Record<string, boolean>;
   onRecordAnswer: (card: TrapCard, isUserCorrect: boolean) => void;
+  isPro?: boolean;
+  onOpenPaywall?: (reason?: string) => void;
 }
 
 type SubView = 'deneme' | 'atlas';
@@ -134,7 +136,9 @@ function buildSmartExamDeck(
 export const DenemeSinavScreen: React.FC<DenemeSinavScreenProps> = ({
   cards,
   solvedCardMap,
-  onRecordAnswer
+  onRecordAnswer,
+  isPro = false,
+  onOpenPaywall
 }) => {
   const [subView, setSubView] = useState<'deneme' | 'atlas'>('deneme');
 
@@ -201,6 +205,12 @@ export const DenemeSinavScreen: React.FC<DenemeSinavScreenProps> = ({
   };
 
   const handleStartPreset = () => {
+    if (selectedPreset !== 'quick-15' && !isPro) {
+      onOpenPaywall?.(
+        '25 ve 40 soruluk kapsamlı HMGS deneme sınavları ile özel sınav oluşturucu Ömür Boyu Tam Erişim (49,99 ₺) paketine dahildir.'
+      );
+      return;
+    }
     if (selectedPreset === 'quick-15') {
       startExam('Hızlı HMGS Tuzak Taraması (15 Soru)', 15, 12, 'Tümü', 'Tümü');
     } else if (selectedPreset === 'full-40') {

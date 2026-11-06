@@ -40,6 +40,9 @@ interface AntrenmanScreenProps {
   onAnswerCard: (card: TrapCard, userSaidCorrect: boolean, answeredRight: boolean) => void;
   onToggleBookmark: (cardId: string) => void;
   onGoToExam: () => void;
+  isPro?: boolean;
+  freeLimit?: number;
+  onOpenPaywall?: (reason?: string) => void;
   defaultShowHighlights?: boolean;
   simpleMode?: boolean;
   soundEnabled?: boolean;
@@ -133,6 +136,9 @@ export const AntrenmanScreen: React.FC<AntrenmanScreenProps> = ({
   onAnswerCard,
   onToggleBookmark,
   onGoToExam,
+  isPro = false,
+  freeLimit = 30,
+  onOpenPaywall,
   defaultShowHighlights = true,
   simpleMode = false,
   soundEnabled = true
@@ -322,6 +328,14 @@ export const AntrenmanScreen: React.FC<AntrenmanScreenProps> = ({
     (userSaidCorrect: boolean) => {
       if (!currentCard || revealState?.answered) return;
 
+      const totalSolvedCount = Object.keys(solvedCardMap).length;
+      if (!isPro && totalSolvedCount >= freeLimit && !(currentCard.id in solvedCardMap)) {
+        onOpenPaywall?.(
+          `${freeLimit} soruluk ücretsiz deneme kotanızı tamamladınız! Tüm 1.380+ kanun kartına ve deneme sınavlarına sınırsız devam etmek için Ömür Boyu Tam Erişim (49,99 ₺) paketini açın.`
+        );
+        return;
+      }
+
       const answeredRight =
         (currentCard.isCorrect && userSaidCorrect) ||
         (!currentCard.isCorrect && !userSaidCorrect);
@@ -347,7 +361,7 @@ export const AntrenmanScreen: React.FC<AntrenmanScreenProps> = ({
         caughtOrRight: answeredRight
       });
     },
-    [currentCard, revealState, onAnswerCard, soundEnabled]
+    [currentCard, revealState, solvedCardMap, isPro, freeLimit, onOpenPaywall, onAnswerCard, soundEnabled]
   );
 
   const handleNextCard = useCallback(() => {

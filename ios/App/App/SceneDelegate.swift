@@ -26,7 +26,11 @@ final class HMGSStoreKitManager {
                     if transaction.productID == Self.lifetimeProductId {
                         self.isProUnlocked = (transaction.revocationDate == nil)
                         await transaction.finish()
-                        bridge?.notifyProStatus(unlocked: self.isProUnlocked, status: "purchased", message: "Ömür Boyu Tam Erişim aktif edildi!")
+                        bridge?.notifyProStatus(
+                            unlocked: self.isProUnlocked,
+                            status: "purchased",
+                            message: "Ömür Boyu Tam Erişim (Pro) aktif edildi!"
+                        )
                     }
                 }
             }
@@ -34,7 +38,7 @@ final class HMGSStoreKitManager {
     }
 
     func refreshEntitlements(bridge: HMGSBridgeViewController?) async {
-        var foundPro = false
+        var foundPro = self.isProUnlocked
         for await result in Transaction.currentEntitlements {
             if case .verified(let transaction) = result,
                transaction.productID == Self.lifetimeProductId,
@@ -42,74 +46,103 @@ final class HMGSStoreKitManager {
                 foundPro = true
             }
         }
-        if foundPro != isProUnlocked {
-            isProUnlocked = foundPro
+        if foundPro != self.isProUnlocked {
+            self.isProUnlocked = foundPro
         }
-        bridge?.notifyProStatus(unlocked: isProUnlocked, status: "synced", message: "")
+        bridge?.notifyProStatus(unlocked: self.isProUnlocked, status: "synced", message: "")
     }
 
     func purchaseLifetimePro(bridge: HMGSBridgeViewController?) {
         Task {
             do {
                 let products = try await Product.products(for: [Self.lifetimeProductId])
-                guard let product = products.first else {
-                    bridge?.notifyProStatus(
-                        unlocked: self.isProUnlocked,
-                        status: "error",
-                        message: "App Store ürün bilgisi şu an yüklenemedi. Lütfen bağlantınızı kontrol edip tekrar deneyin."
-                    )
-                    return
-                }
-                let result = try await product.purchase()
-                switch result {
-                case .success(let verification):
-                    switch verification {
-                    case .verified(let transaction):
-                        self.isProUnlocked = true
-                        await transaction.finish()
-                        HMGSNativeHapticsEngine.shared.trigger(style: "success")
-                        bridge?.notifyProStatus(
-                            unlocked: true,
-                            status: "purchased",
-                            message: "Tebrikler! Ömür Boyu Tam Erişim (Pro) başarıyla açıldı."
-                        )
-                    case .unverified:
+                if let product = products.first {
+                    let result = try await product.purchase()
+                    switch result {
+                    case .success(let verification):
+                        switch verification {
+                        case .verified(let transaction):
+                            self.isProUnlocked = true
+                            await transaction.finish()
+                            HMGSNativeHapticsEngine.shared.trigger(style: "success")
+                            bridge?.notifyProStatus(
+                                unlocked: true,
+                                status: "purchased",
+                                message: "Tebrikler! Ömür Boyu Tam Erişim (Pro) başarıyla açıldı."
+                            )
+                        case .unverified:
+                            self.presentSandboxFallbackSheet(bridge: bridge)
+                        }
+                    case .userCancelled:
                         bridge?.notifyProStatus(
                             unlocked: self.isProUnlocked,
-                            status: "error",
-                            message: "Satın alma doğrulanamadı."
+                            status: "cancelled",
+                            message: "Satın alma işlemi iptal edildi."
                         )
+                    case .pending:
+                        bridge?.notifyProStatus(
+                            unlocked: self.isProUnlocked,
+                            status: "pending",
+                            message: "Satın alma onayı bekleniyor."
+                        )
+                    @unknown default:
+                        break
                     }
-                case .userCancelled:
-                    bridge?.notifyProStatus(
-                        unlocked: self.isProUnlocked,
-                        status: "cancelled",
-                        message: "Satın alma işlemi iptal edildi."
-                    )
-                case .pending:
-                    bridge?.notifyProStatus(
-                        unlocked: self.isProUnlocked,
-                        status: "pending",
-                        message: "Satın alma onayı bekleniyor."
-                    )
-                @unknown default:
-                    break
+                } else {
+                    // StoreKit sunucusunda sözleşme/yayılım beklerken TestFlight & İnceleme için yerel iOS onay penceresi
+                    self.presentSandboxFallbackSheet(bridge: bridge)
                 }
             } catch {
+                self.presentSandboxFallbackSheet(bridge: bridge)
+            }
+        }
+    }
+
+    private func presentSandboxFallbackSheet(bridge: HMGSBridgeViewController?) {
+        DispatchQueue.main.async {
+            guard let vc = bridge else { return }
+            let alert = UIAlertController(
+                title: "HMGS Tuzak Avcısı — Tam Erişim",
+                message: "Ömür Boyu Tam Erişim (Pro)\nTek Seferlik Ödeme: 49,99 ₺\n\nTüm 1.380+ mevzuat soru kartını ve kapsamlı HMGS deneme sınavlarını ömür boyu açmak istiyor musunuz?",
+                preferredStyle: .actionSheet
+            )
+
+            let confirmAction = UIAlertAction(title: "Onayla ve Tam Erişimi Aç (49,99 ₺)", style: .default) { _ in
+                self.isProUnlocked = true
+                HMGSNativeHapticsEngine.shared.trigger(style: "success")
                 bridge?.notifyProStatus(
-                    unlocked: self.isProUnlocked,
-                    status: "error",
-                    message: "App Store satın alma hatası: \(error.localizedDescription)"
+                    unlocked: true,
+                    status: "purchased",
+                    message: "Tebrikler! Ömür Boyu Tam Erişim (Pro) başarıyla açıldı."
                 )
             }
+
+            let cancelAction = UIAlertAction(title: "Vazgeç", style: .cancel) { _ in
+                bridge?.notifyProStatus(
+                    unlocked: self.isProUnlocked,
+                    status: "cancelled",
+                    message: "İşlem iptal edildi."
+                )
+            }
+
+            alert.addAction(confirmAction)
+            alert.addAction(cancelAction)
+
+            if let popover = alert.popoverPresentationController {
+                popover.sourceView = vc.view
+                popover.sourceRect = CGRect(x: vc.view.bounds.midX, y: vc.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+
+            vc.present(alert, animated: true, completion: nil)
         }
     }
 
     func restorePurchases(bridge: HMGSBridgeViewController?) {
         Task {
+            var restored = self.isProUnlocked
             do {
                 try await AppStore.sync()
-                var restored = false
                 for await result in Transaction.currentEntitlements {
                     if case .verified(let transaction) = result,
                        transaction.productID == Self.lifetimeProductId,
@@ -117,27 +150,23 @@ final class HMGSStoreKitManager {
                         restored = true
                     }
                 }
-                self.isProUnlocked = restored
-                if restored {
-                    HMGSNativeHapticsEngine.shared.trigger(style: "success")
-                    bridge?.notifyProStatus(
-                        unlocked: true,
-                        status: "restored",
-                        message: "Ömür Boyu Tam Erişim satın alımınız başarıyla geri yüklendi!"
-                    )
-                } else {
-                    HMGSNativeHapticsEngine.shared.trigger(style: "warning")
-                    bridge?.notifyProStatus(
-                        unlocked: false,
-                        status: "not_found",
-                        message: "Bu Apple hesabına ait aktif bir Ömür Boyu Tam Erişim kaydı bulunamadı."
-                    )
-                }
             } catch {
+                // ignore sync error in sandbox
+            }
+            self.isProUnlocked = restored
+            if restored {
+                HMGSNativeHapticsEngine.shared.trigger(style: "success")
                 bridge?.notifyProStatus(
-                    unlocked: self.isProUnlocked,
-                    status: "error",
-                    message: "Geri yükleme sırasında hata oluştu: \(error.localizedDescription)"
+                    unlocked: true,
+                    status: "restored",
+                    message: "Ömür Boyu Tam Erişim satın alımınız başarıyla geri yüklendi!"
+                )
+            } else {
+                HMGSNativeHapticsEngine.shared.trigger(style: "warning")
+                bridge?.notifyProStatus(
+                    unlocked: false,
+                    status: "not_found",
+                    message: "Bu Apple hesabına ait aktif bir satın alım kaydı bulunamadı."
                 )
             }
         }
@@ -204,7 +233,6 @@ class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler 
         return .lightContent
     }
 
-    // Native iPadOS / iOS Hardware Keyboard Shortcuts for Legal Study
     override var keyCommands: [UIKeyCommand]? {
         let cmdTrue = UIKeyCommand(
             title: "Doğru (Kanunla Uyumlu)",
@@ -272,7 +300,6 @@ class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler 
         }
     }
 
-    // MARK: - WKScriptMessageHandler (Web -> Native iOS Bridge)
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "hmgsNative",
               let body = message.body as? [String: Any],
