@@ -1,6 +1,6 @@
 /**
  * ÖSYM HMGS Resmi Takvimi & Dinamik Tarih Hesaplayıcı
- * HMGS yılda iki kez düzenlenir (Bahar: Mayıs ayı sonu, Güz: Eylül ayı sonu).
+ * HMGS yılda iki kez düzenlenir (1. Dönem Bahar: Nisan ayı sonu, 2. Dönem Güz: Eylül ayı sonu).
  * Bu fonksiyon sistem saatini esas alarak DAİMA en yakın gelecekteki resmi oturumu belirler.
  */
 export interface HMGSExamInfo {
@@ -10,7 +10,7 @@ export interface HMGSExamInfo {
   recommendedDailyGoal: number;
 }
 
-export function getUpcomingHMGSExam(customTargetDate?: string, totalCards: number = 804): HMGSExamInfo {
+export function getUpcomingHMGSExam(customTargetDate?: string, totalCards: number = 1471): HMGSExamInfo {
   const now = new Date();
 
   // Helper: Verilen yıl ve ayın (0-indexed) son pazar gününü hesapla (ÖSYM sınav standardı)
@@ -24,12 +24,13 @@ export function getUpcomingHMGSExam(customTargetDate?: string, totalCards: numbe
 
   const currentYear = now.getFullYear();
 
-  // ÖSYM Resmi HMGS Oturum Adayları (Bu yıl ve gelecek yıl)
+  // ÖSYM Resmi HMGS Oturum Adayları (Bu yıl ve gelecek iki yıl)
   const candidates: Array<{ title: string; date: Date }> = [
-    { title: `${currentYear} HMGS 1. Dönem (Bahar)`, date: getLastSunday(currentYear, 4) }, // Mayıs sonu
+    { title: `${currentYear} HMGS 1. Dönem (Bahar)`, date: getLastSunday(currentYear, 3) }, // Nisan sonu
     { title: `${currentYear} HMGS 2. Dönem (Güz)`, date: getLastSunday(currentYear, 8) }, // Eylül sonu
-    { title: `${currentYear + 1} HMGS 1. Dönem (Bahar)`, date: getLastSunday(currentYear + 1, 4) },
-    { title: `${currentYear + 1} HMGS 2. Dönem (Güz)`, date: getLastSunday(currentYear + 1, 8) },
+    { title: `${currentYear + 1} HMGS 1. Dönem (Bahar)`, date: getLastSunday(currentYear + 1, 3) }, // Nisan sonu
+    { title: `${currentYear + 1} HMGS 2. Dönem (Güz)`, date: getLastSunday(currentYear + 1, 8) }, // Eylül sonu
+    { title: `${currentYear + 2} HMGS 1. Dönem (Bahar)`, date: getLastSunday(currentYear + 2, 3) },
   ];
 
   // Kullanıcı özel bir gelecek tarih seçmişse ve bu tarih gelecekteyse
@@ -38,7 +39,7 @@ export function getUpcomingHMGSExam(customTargetDate?: string, totalCards: numbe
     customDate.setHours(10, 15, 0, 0);
     if (!isNaN(customDate.getTime()) && customDate.getTime() > now.getTime()) {
       const days = Math.max(1, Math.ceil((customDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
-      const rec = Math.min(50, Math.max(15, Math.ceil((totalCards * 1.5) / days)));
+      const rec = Math.min(50, Math.max(15, Math.ceil((totalCards * 1.2) / days)));
       return {
         title: 'Hedef Sınav Tarihi',
         dateStr: customTargetDate,
@@ -54,12 +55,13 @@ export function getUpcomingHMGSExam(customTargetDate?: string, totalCards: numbe
   const dateStr = nextExam.date.toISOString().slice(0, 10);
 
   // Günlük makul çalışma hedefi: 15 ile 50 soru arası dengeli ve pedagojik
-  const recommendedDailyGoal = Math.min(50, Math.max(15, Math.ceil((totalCards * 1.5) / daysLeft)));
+  const recommendedDailyGoal = Math.min(50, Math.max(15, Math.ceil((totalCards * 1.2) / daysLeft)));
 
   return {
     title: nextExam.title,
     dateStr,
+    dateStrFormatted: dateStr,
     daysLeft,
     recommendedDailyGoal
-  };
+  } as HMGSExamInfo;
 }

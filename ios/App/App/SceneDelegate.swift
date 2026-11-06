@@ -4,6 +4,146 @@ import Capacitor
 import CoreSpotlight
 import StoreKit
 
+// MARK: - Native StoreKit 2 Lifetime Pro Manager (com.hmgs.tuzakavcisi.lifetime.pro)
+@available(iOS 15.0, *)
+final class HMGSStoreKitManager {
+    static let shared = HMGSStoreKitManager()
+    static let lifetimeProductId = "com.hmgs.tuzakavcisi.lifetime.pro"
+    private let storageKey = "hmgs_lifetime_pro_unlocked"
+    private var updatesTask: Task<Void, Never>?
+
+    var isProUnlocked: Bool {
+        get { UserDefaults.standard.bool(forKey: storageKey) }
+        set { UserDefaults.standard.set(newValue, forKey: storageKey) }
+    }
+
+    func startObservingTransactions(bridge: HMGSBridgeViewController?) {
+        updatesTask?.cancel()
+        updatesTask = Task {
+            await refreshEntitlements(bridge: bridge)
+            for await result in Transaction.updates {
+                if case .verified(let transaction) = result {
+                    if transaction.productID == Self.lifetimeProductId {
+                        self.isProUnlocked = (transaction.revocationDate == nil)
+                        await transaction.finish()
+                        bridge?.notifyProStatus(unlocked: self.isProUnlocked, status: "purchased", message: "Ömür Boyu Tam Erişim aktif edildi!")
+                    }
+                }
+            }
+        }
+    }
+
+    func refreshEntitlements(bridge: HMGSBridgeViewController?) async {
+        var foundPro = false
+        for await result in Transaction.currentEntitlements {
+            if case .verified(let transaction) = result,
+               transaction.productID == Self.lifetimeProductId,
+               transaction.revocationDate == nil {
+                foundPro = true
+            }
+        }
+        if foundPro != isProUnlocked {
+            isProUnlocked = foundPro
+        }
+        bridge?.notifyProStatus(unlocked: isProUnlocked, status: "synced", message: "")
+    }
+
+    func purchaseLifetimePro(bridge: HMGSBridgeViewController?) {
+        Task {
+            do {
+                let products = try await Product.products(for: [Self.lifetimeProductId])
+                guard let product = products.first else {
+                    bridge?.notifyProStatus(
+                        unlocked: self.isProUnlocked,
+                        status: "error",
+                        message: "App Store ürün bilgisi şu an yüklenemedi. Lütfen bağlantınızı kontrol edip tekrar deneyin."
+                    )
+                    return
+                }
+                let result = try await product.purchase()
+                switch result {
+                case .success(let verification):
+                    switch verification {
+                    case .verified(let transaction):
+                        self.isProUnlocked = true
+                        await transaction.finish()
+                        HMGSNativeHapticsEngine.shared.trigger(style: "success")
+                        bridge?.notifyProStatus(
+                            unlocked: true,
+                            status: "purchased",
+                            message: "Tebrikler! Ömür Boyu Tam Erişim (Pro) başarıyla açıldı."
+                        )
+                    case .unverified:
+                        bridge?.notifyProStatus(
+                            unlocked: self.isProUnlocked,
+                            status: "error",
+                            message: "Satın alma doğrulanamadı."
+                        )
+                    }
+                case .userCancelled:
+                    bridge?.notifyProStatus(
+                        unlocked: self.isProUnlocked,
+                        status: "cancelled",
+                        message: "Satın alma işlemi iptal edildi."
+                    )
+                case .pending:
+                    bridge?.notifyProStatus(
+                        unlocked: self.isProUnlocked,
+                        status: "pending",
+                        message: "Satın alma onayı bekleniyor."
+                    )
+                @unknown default:
+                    break
+                }
+            } catch {
+                bridge?.notifyProStatus(
+                    unlocked: self.isProUnlocked,
+                    status: "error",
+                    message: "App Store satın alma hatası: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    func restorePurchases(bridge: HMGSBridgeViewController?) {
+        Task {
+            do {
+                try await AppStore.sync()
+                var restored = false
+                for await result in Transaction.currentEntitlements {
+                    if case .verified(let transaction) = result,
+                       transaction.productID == Self.lifetimeProductId,
+                       transaction.revocationDate == nil {
+                        restored = true
+                    }
+                }
+                self.isProUnlocked = restored
+                if restored {
+                    HMGSNativeHapticsEngine.shared.trigger(style: "success")
+                    bridge?.notifyProStatus(
+                        unlocked: true,
+                        status: "restored",
+                        message: "Ömür Boyu Tam Erişim satın alımınız başarıyla geri yüklendi!"
+                    )
+                } else {
+                    HMGSNativeHapticsEngine.shared.trigger(style: "warning")
+                    bridge?.notifyProStatus(
+                        unlocked: false,
+                        status: "not_found",
+                        message: "Bu Apple hesabına ait aktif bir Ömür Boyu Tam Erişim kaydı bulunamadı."
+                    )
+                }
+            } catch {
+                bridge?.notifyProStatus(
+                    unlocked: self.isProUnlocked,
+                    status: "error",
+                    message: "Geri yükleme sırasında hata oluştu: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+}
+
 // MARK: - Native Haptics & Feedback Engine
 final class HMGSNativeHapticsEngine {
     static let shared = HMGSNativeHapticsEngine()
@@ -43,7 +183,7 @@ final class HMGSNativeHapticsEngine {
     }
 }
 
-// MARK: - Custom HMGS Bridge View Controller (iPad Keyboard Shortcuts + Native Message Handler)
+// MARK: - Custom HMGS Bridge View Controller (StoreKit 2 + iPad Keyboard Shortcuts + Native Message Handler)
 class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler {
 
     override func viewDidLoad() {
@@ -56,6 +196,8 @@ class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler 
             webView.isOpaque = false
             webView.configuration.userContentController.add(self, name: "hmgsNative")
         }
+
+        HMGSStoreKitManager.shared.startObservingTransactions(bridge: self)
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -111,6 +253,16 @@ class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler 
         dispatchWebEvent(name: "hmgs:keyboardShortcut", payload: ["command": "toggle_bookmark"])
     }
 
+    func notifyProStatus(unlocked: Bool, status: String, message: String) {
+        let payload: [String: String] = [
+            "unlocked": unlocked ? "true" : "false",
+            "status": status,
+            "message": message,
+            "productId": HMGSStoreKitManager.lifetimeProductId
+        ]
+        dispatchWebEvent(name: "hmgs:proStatus", payload: payload)
+    }
+
     func dispatchWebEvent(name: String, payload: [String: String]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
               let jsonString = String(data: data, encoding: .utf8) else { return }
@@ -130,6 +282,19 @@ class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler 
         case "haptic":
             let style = (body["style"] as? String) ?? "light"
             HMGSNativeHapticsEngine.shared.trigger(style: style)
+
+        case "purchaseLifetimePro":
+            HMGSNativeHapticsEngine.shared.trigger(style: "medium")
+            HMGSStoreKitManager.shared.purchaseLifetimePro(bridge: self)
+
+        case "restorePurchases":
+            HMGSNativeHapticsEngine.shared.trigger(style: "selection")
+            HMGSStoreKitManager.shared.restorePurchases(bridge: self)
+
+        case "checkProStatus":
+            Task {
+                await HMGSStoreKitManager.shared.refreshEntitlements(bridge: self)
+            }
 
         case "shareCard":
             let text = (body["text"] as? String) ?? "HMGS Tuzak Avcısı — Mevzuat Çalışma Kartı"

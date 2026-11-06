@@ -7,7 +7,8 @@ import {
   BookMarked,
   BarChart3,
   Settings,
-  Flame
+  Flame,
+  Crown
 } from 'lucide-react';
 import {
   FilterPillCategory,
@@ -25,8 +26,12 @@ import { DenemeSinavScreen } from './components/DenemeSinavScreen';
 import { TuzakDefterimScreen, DefterimSubFilter } from './components/TuzakDefterimScreen';
 import { AyarlarScreen, AppSettings, FontScale } from './components/AyarlarScreen';
 import { GirisScreen } from './components/GirisScreen';
+import { PaywallModal } from './components/PaywallModal';
+import { checkProStatusNatively } from './utils/audioFeedback';
 
 type ActiveTab = 'home' | 'antrenman' | 'deneme' | 'analiz' | 'defterim' | 'ayarlar';
+
+const FREE_QUESTION_LIMIT = 60;
 
 const STORAGE_KEYS = {
   VAULT: 'hmgs_vault_v6',
@@ -34,7 +39,8 @@ const STORAGE_KEYS = {
   SOLVED: 'hmgs_solved_v6',
   THEME: 'hmgs_theme_v6',
   SETTINGS: 'hmgs_settings_v1',
-  PROFILE: 'hmgs_profile_v1'
+  PROFILE: 'hmgs_profile_v1',
+  PRO: 'hmgs_pro_v1'
 };
 
 const FONT_PERCENT: Record<FontScale, string> = { sm: '93.75%', md: '100%', lg: '106.25%' };
@@ -166,6 +172,33 @@ export function App() {
   });
 
   const [spacedRepetitionSessionIds, setSpacedRepetitionSessionIds] = useState<string[] | null>(null);
+  const [isPro, setIsPro] = useState<boolean>(() => localStorage.getItem(STORAGE_KEYS.PRO) === 'true');
+  const [isPaywallOpen, setIsPaywallOpen] = useState<boolean>(false);
+  const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
+
+  const openPaywall = (reason?: string) => {
+    setPaywallReason(reason);
+    setIsPaywallOpen(true);
+  };
+
+  const handleUnlockPro = () => {
+    setIsPro(true);
+    localStorage.setItem(STORAGE_KEYS.PRO, 'true');
+  };
+
+  // Native iOS StoreKit 2 durum senkronizasyonu
+  useEffect(() => {
+    checkProStatusNatively();
+    const onProStatus = (e: Event) => {
+      const detail = (e as CustomEvent<Record<string, string>>).detail;
+      if (detail?.unlocked === 'true') {
+        setIsPro(true);
+        localStorage.setItem(STORAGE_KEYS.PRO, 'true');
+      }
+    };
+    window.addEventListener('hmgs:proStatus', onProStatus);
+    return () => window.removeEventListener('hmgs:proStatus', onProStatus);
+  }, []);
 
   // Tema: açık / koyu / sistem
   useEffect(() => {
@@ -264,8 +297,24 @@ export function App() {
   }, [vaultEntries, cards]);
 
   const handleAnswerCard = (card: TrapCard, _userSaidCorrect: boolean, answeredRight: boolean) => {
+    const solvedCountNow = Object.keys(solvedCardMap).length;
+    if (!isPro && solvedCountNow >= FREE_QUESTION_LIMIT && !(card.id in solvedCardMap)) {
+      openPaywall(
+        `${FREE_QUESTION_LIMIT} soruluk ücretsiz deneme kotanızı tamamladınız! Tüm ${cards.length}+ kanun maddesi tuzağına ve deneme sınavlarına sınırsız devam etmek için Ömür Boyu Tam Erişim (99,99 ₺) paketini açın.`
+      );
+      return;
+    }
+
     const categoryKey = getCategoryForBranch(card.branch);
     setSolvedCardMap((prev) => ({ ...prev, [card.id]: answeredRight }));
+
+    if (!isPro && solvedCountNow + 1 === FREE_QUESTION_LIMIT && !(card.id in solvedCardMap)) {
+      setTimeout(() => {
+        openPaywall(
+          `Tebrikler, ilk ${FREE_QUESTION_LIMIT} soruyu tamamladınız! Kalan tüm kanun maddesi tuzaklarına ve tam kapsamlı deneme sınavlarına sınırsız erişmek için Ömür Boyu Tam Erişim (99,99 ₺) paketine geçebilirsiniz.`
+        );
+      }, 900);
+    }
 
     setStats((prev) => {
       const prevCat = prev.byCategory[categoryKey] || { answered: 0, correct: 0 };
@@ -581,22 +630,48 @@ export function App() {
           </nav>
         </div>
 
-        {/* Masaüstü Günlük Hedef & Seri Rozeti */}
-        <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-600 dark:text-slate-300">Günlük hedef</span>
-            <span className="font-bold text-indigo-600 dark:text-indigo-400">
-              {stats.todaySolvedCount}/{stats.dailyGoalTarget}
-            </span>
-          </div>
-          <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-            <div className="h-full bg-indigo-600 rounded-full transition-all" style={{ width: `${dailyGoalPct}%` }} />
-          </div>
-          <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-            <span className="inline-flex items-center gap-1 font-semibold">
-              <Flame className="w-3.5 h-3.5 text-amber-500 fill-amber-500" /> {stats.streakDays} gün
-            </span>
-            <span>Doğruluk %{caughtPercentage}</span>
+        {/* Masaüstü Günlük Hedef & Ömür Boyu Tam Erişim Kartı */}
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => openPaywall()}
+            className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between ${
+              isPro
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                : 'bg-gradient-to-r from-indigo-600/15 to-amber-500/15 border-indigo-500/30 hover:border-indigo-500/60 text-slate-900 dark:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Crown className={`w-4 h-4 shrink-0 ${isPro ? 'text-emerald-500' : 'text-amber-500'}`} />
+              <div className="min-w-0">
+                <div className="text-xs font-bold truncate">
+                  {isPro ? 'Ömür Boyu Pro Aktif' : 'Tam Erişim (Pro)'}
+                </div>
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                  {isPro
+                    ? 'Sınırsız soru & deneme'
+                    : `Ücretsiz: ${Math.min(Object.keys(solvedCardMap).length, FREE_QUESTION_LIMIT)}/${FREE_QUESTION_LIMIT} • 99,99 ₺`}
+                </div>
+              </div>
+            </div>
+          </button>
+
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-600 dark:text-slate-300">Günlük hedef</span>
+              <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                {stats.todaySolvedCount}/{stats.dailyGoalTarget}
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+              <div className="h-full bg-indigo-600 rounded-full transition-all" style={{ width: `${dailyGoalPct}%` }} />
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+              <span className="inline-flex items-center gap-1 font-semibold">
+                <Flame className="w-3.5 h-3.5 text-amber-500 fill-amber-500" /> {stats.streakDays} gün
+              </span>
+              <span>Doğruluk %{caughtPercentage}</span>
+            </div>
           </div>
         </div>
       </aside>
@@ -604,11 +679,11 @@ export function App() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Mobil & Küçük Tablet Üst Çubuk */}
         <header className="lg:hidden sticky top-0 z-30 bg-white/95 dark:bg-[#0D1320]/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 pt-[env(safe-area-inset-top)]">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
+          <div className="max-w-4xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => setActiveTab('home')}
-              className="flex items-center gap-2.5 min-w-0 text-left cursor-pointer"
+              className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
             >
               <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
                 <Scale className="w-4 h-4" />
@@ -616,13 +691,22 @@ export function App() {
               <span className="font-display font-bold text-sm sm:text-base truncate">HMGS Tuzak Avcısı</span>
             </button>
 
-            <div className="flex items-center gap-2 shrink-0 text-xs font-semibold">
-              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400">
+            <div className="flex items-center gap-1.5 shrink-0 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => openPaywall()}
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl font-bold transition-colors cursor-pointer ${
+                  isPro
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                }`}
+              >
+                <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>{isPro ? 'Pro' : 'Tam Erişim'}</span>
+              </button>
+              <span className="inline-flex items-center gap-1 px-2 py-1.5 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400">
                 <Flame className="w-3.5 h-3.5 fill-amber-500" />
                 {stats.streakDays}
-              </span>
-              <span className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
-                {stats.todaySolvedCount}/{stats.dailyGoalTarget}
               </span>
               <button
                 type="button"
@@ -782,6 +866,16 @@ export function App() {
           </div>
         </nav>
       </div>
+
+      <PaywallModal
+        isOpen={isPaywallOpen}
+        onClose={() => setIsPaywallOpen(false)}
+        isPro={isPro}
+        onUnlockPro={handleUnlockPro}
+        solvedCount={Object.keys(solvedCardMap).length}
+        freeLimit={FREE_QUESTION_LIMIT}
+        triggerReason={paywallReason}
+      />
     </div>
   );
 }

@@ -50,6 +50,18 @@ export function scheduleNativeDailyReminder(hour: number = 20, minute: number = 
   return postNativeMessage({ action: 'scheduleReminder', hour, minute });
 }
 
+export function purchaseLifetimeProNatively(): boolean {
+  return postNativeMessage({ action: 'purchaseLifetimePro' });
+}
+
+export function restorePurchasesNatively(): boolean {
+  return postNativeMessage({ action: 'restorePurchases' });
+}
+
+export function checkProStatusNatively(): boolean {
+  return postNativeMessage({ action: 'checkProStatus' });
+}
+
 let audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext | null {
