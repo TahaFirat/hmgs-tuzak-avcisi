@@ -39,6 +39,11 @@ final class HMGSStoreKitManager {
 
     func refreshEntitlements(bridge: HMGSBridgeViewController?) async {
         var foundPro = self.isProUnlocked
+        var displayPrice = "49,99 ₺"
+        if let products = try? await Product.products(for: [Self.lifetimeProductId]),
+           let product = products.first {
+            displayPrice = product.displayPrice
+        }
         for await result in Transaction.currentEntitlements {
             if case .verified(let transaction) = result,
                transaction.productID == Self.lifetimeProductId,
@@ -49,7 +54,7 @@ final class HMGSStoreKitManager {
         if foundPro != self.isProUnlocked {
             self.isProUnlocked = foundPro
         }
-        bridge?.notifyProStatus(unlocked: self.isProUnlocked, status: "synced", message: "")
+        bridge?.notifyProStatus(unlocked: self.isProUnlocked, status: "synced", message: "", displayPrice: displayPrice)
     }
 
     func purchaseLifetimePro(bridge: HMGSBridgeViewController?) {
@@ -281,11 +286,12 @@ class HMGSBridgeViewController: CAPBridgeViewController, WKScriptMessageHandler 
         dispatchWebEvent(name: "hmgs:keyboardShortcut", payload: ["command": "toggle_bookmark"])
     }
 
-    func notifyProStatus(unlocked: Bool, status: String, message: String) {
+    func notifyProStatus(unlocked: Bool, status: String, message: String, displayPrice: String = "49,99 ₺") {
         let payload: [String: String] = [
             "unlocked": unlocked ? "true" : "false",
             "status": status,
             "message": message,
+            "displayPrice": displayPrice,
             "productId": HMGSStoreKitManager.lifetimeProductId
         ]
         dispatchWebEvent(name: "hmgs:proStatus", payload: payload)

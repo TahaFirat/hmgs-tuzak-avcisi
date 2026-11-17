@@ -14,6 +14,7 @@ import {
 import {
   purchaseLifetimeProNatively,
   restorePurchasesNatively,
+  checkProStatusNatively,
   triggerNativeHaptic
 } from '../utils/audioFeedback';
 
@@ -37,6 +38,8 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
   triggerReason
 }) => {
   const [loadingAction, setLoadingAction] = useState<'purchase' | 'restore' | null>(null);
+  const [displayPrice, setDisplayPrice] = useState<string>('49,99 ₺');
+  const [legalDoc, setLegalDoc] = useState<'privacy' | 'terms' | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(
     null
   );
@@ -45,6 +48,9 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
     if (!isOpen) {
       setLoadingAction(null);
       setStatusMessage(null);
+      setLegalDoc(null);
+    } else {
+      checkProStatusNatively();
     }
   }, [isOpen]);
 
@@ -52,6 +58,9 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
     const onProStatus = (e: Event) => {
       const detail = (e as CustomEvent<Record<string, string>>).detail;
       if (!detail) return;
+      if (detail.displayPrice) {
+        setDisplayPrice(detail.displayPrice);
+      }
       setLoadingAction(null);
       if (detail.unlocked === 'true') {
         onUnlockPro();
@@ -230,7 +239,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
             </div>
             <div className="text-right shrink-0 pl-2">
               <div className="font-display font-black text-xl sm:text-2xl text-slate-900 dark:text-white whitespace-nowrap">
-                49,99 ₺
+                {displayPrice}
               </div>
               <div className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
                 Ömür Boyu
@@ -272,7 +281,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 <span>
                   {loadingAction === 'purchase'
                     ? 'App Store Bağlanıyor...'
-                    : 'Ömür Boyu Tam Erişimi Aç • 49,99 ₺'}
+                    : `Ömür Boyu Tam Erişimi Aç • ${displayPrice}`}
                 </span>
               </button>
 
@@ -296,25 +305,64 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
           <div className="pt-1.5 border-t border-slate-200/80 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400">
             <span>Apple Kimliğiniz ile tek seferlik güvenli ödeme</span>
             <div className="flex items-center gap-3">
-              <a
-                href="/privacy-policy.html"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-indigo-500 underline"
+              <button
+                type="button"
+                onClick={() => setLegalDoc('privacy')}
+                className="hover:text-indigo-500 underline cursor-pointer"
               >
                 Gizlilik Politikası
-              </a>
-              <a
-                href="/terms-of-service.html"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-indigo-500 underline"
+              </button>
+              <button
+                type="button"
+                onClick={() => setLegalDoc('terms')}
+                className="hover:text-indigo-500 underline cursor-pointer"
               >
                 Kullanım Koşulları
-              </a>
+              </button>
             </div>
           </div>
         </div>
+
+        {/* Uygulama İçi Yasal Metin Okuyucu (iPad & iPhone Uyumlu) */}
+        {legalDoc && (
+          <div className="absolute inset-0 z-20 bg-white dark:bg-[#0F1626] flex flex-col">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800">
+              <h3 className="font-display font-bold text-sm text-slate-900 dark:text-white">
+                {legalDoc === 'privacy' ? 'Gizlilik Politikası' : 'Kullanım Koşulları'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setLegalDoc(null)}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold cursor-pointer"
+              >
+                Kapat
+              </button>
+            </div>
+            <div className="p-4 sm:p-5 overflow-y-auto text-xs text-slate-600 dark:text-slate-300 space-y-3 leading-relaxed">
+              {legalDoc === 'privacy' ? (
+                <>
+                  <p>
+                    <strong>HMGS Tuzak Avcısı</strong> tamamen cihaz içi (offline-first) çalışır. Ad-soyad, telefon, T.C. kimlik numarası veya e-posta adresi gibi kişisel verileriniz toplanmaz ve harici sunuculara gönderilmez.
+                  </p>
+                  <p>
+                    Çözdüğünüz sorular, hata sepetiniz, çalışma istatistikleriniz ve tema tercihleriniz yalnızca kendi cihazınızda saklanır. Üçüncü taraf reklam veya takip SDK&apos;sı içermez.
+                  </p>
+                  <p>İletişim: tahafirat@gmail.com</p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    <strong>Ömür Boyu Tam Erişim (Pro)</strong>, tek seferlik ({displayPrice}) bir Uygulama İçi Satın Alma (Non-Consumable) lisansıdır; abonelik veya otomatik yenileme içermez. Ödeme Apple Kimliğiniz üzerinden tahsil edilir ve aynı Apple Kimliğiyle &quot;Satın Alımları Geri Yükle&quot; seçeneği üzerinden tüm cihazlarınızda kullanılabilir.
+                  </p>
+                  <p>
+                    Uygulamadaki soru kartları ve açıklamalar HMGS hazırlık amacıyla hazırlanmış eğitim içeriğidir; resmi hukuki danışmanlık yerine geçmez.
+                  </p>
+                  <p>Destek: tahafirat@gmail.com</p>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
