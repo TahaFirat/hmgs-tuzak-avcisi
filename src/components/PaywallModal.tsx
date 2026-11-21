@@ -1,22 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Crown,
   CheckCircle2,
+  Crown,
+  RotateCcw,
+  Scale,
   ShieldCheck,
   Sparkles,
-  RotateCcw,
-  X,
-  Lock,
-  BookOpen,
-  Timer,
-  Layers
+  X
 } from 'lucide-react';
 import {
-  purchaseLifetimeProNatively,
-  restorePurchasesNatively,
-  checkProStatusNatively,
-  triggerNativeHaptic
-} from '../utils/audioFeedback';
+  LEGAL_SPOT_CARDS,
+  LEGAL_VAKA_QUESTIONS,
+  TOTAL_INTERACTIVE_LEGAL_ITEMS
+} from '../data/legalQuestionRepository';
+import {
+  FREE_QUESTION_LIMIT,
+  LiveProPrices,
+  PRO_MONTHLY_PRICE_LABEL,
+  PRO_MONTHLY_PRODUCT_ID,
+  PRO_SIXMONTH_PRICE_LABEL,
+  PRO_SIXMONTH_PRODUCT_ID,
+  PRO_WEEKLY_PRICE_LABEL,
+  PRO_WEEKLY_PRODUCT_ID,
+  SubscriptionPlanId,
+  purchasePlanNatively,
+  refreshNativeProPrices,
+  restorePurchasesNativelyAsync,
+  triggerHaptic
+} from '../services/nativeBridge';
 
 interface PaywallModalProps {
   isOpen: boolean;
@@ -24,8 +35,9 @@ interface PaywallModalProps {
   isPro: boolean;
   onUnlockPro: () => void;
   solvedCount: number;
-  freeLimit: number;
+  freeLimit?: number;
   triggerReason?: string;
+  prices?: LiveProPrices;
 }
 
 export const PaywallModal: React.FC<PaywallModalProps> = ({
@@ -34,220 +46,265 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
   isPro,
   onUnlockPro,
   solvedCount,
-  freeLimit,
-  triggerReason
+  freeLimit = FREE_QUESTION_LIMIT,
+  triggerReason,
+  prices = {
+    weekly: PRO_WEEKLY_PRICE_LABEL,
+    monthly: PRO_MONTHLY_PRICE_LABEL,
+    sixmonths: PRO_SIXMONTH_PRICE_LABEL
+  }
 }) => {
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlanId>('sixmonths');
   const [loadingAction, setLoadingAction] = useState<'purchase' | 'restore' | null>(null);
-  const [displayPrice, setDisplayPrice] = useState<string>('49,99 ₺');
   const [legalDoc, setLegalDoc] = useState<'privacy' | 'terms' | null>(null);
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(
-    null
-  );
+  const [statusMessage, setStatusMessage] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
-    if (!isOpen) {
-      setLoadingAction(null);
+    if (isOpen) {
       setStatusMessage(null);
       setLegalDoc(null);
+      refreshNativeProPrices();
     } else {
-      checkProStatusNatively();
+      setLoadingAction(null);
+      setLegalDoc(null);
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    const onProStatus = (e: Event) => {
-      const detail = (e as CustomEvent<Record<string, string>>).detail;
-      if (!detail) return;
-      if (detail.displayPrice) {
-        setDisplayPrice(detail.displayPrice);
-      }
-      setLoadingAction(null);
-      if (detail.unlocked === 'true') {
-        onUnlockPro();
-        setStatusMessage({
-          type: 'success',
-          text: detail.message || 'Ömür Boyu Tam Erişim (Pro) başarıyla aktif edildi!'
-        });
-      } else if (detail.status === 'cancelled') {
-        setStatusMessage({
-          type: 'info',
-          text: 'Satın alma işlemi iptal edildi.'
-        });
-      } else if (detail.message) {
-        setStatusMessage({
-          type: detail.status === 'error' ? 'error' : 'info',
-          text: detail.message
-        });
-      }
-    };
-
-    window.addEventListener('hmgs:proStatus', onProStatus);
-    return () => window.removeEventListener('hmgs:proStatus', onProStatus);
-  }, [onUnlockPro]);
-
   if (!isOpen) return null;
 
-  const handlePurchase = () => {
-    triggerNativeHaptic('medium');
-    setStatusMessage(null);
+  const activeProductId =
+    selectedPlan === 'sixmonths'
+      ? PRO_SIXMONTH_PRODUCT_ID
+      : selectedPlan === 'monthly'
+      ? PRO_MONTHLY_PRODUCT_ID
+      : PRO_WEEKLY_PRODUCT_ID;
+
+  const activeCtaPrice =
+    selectedPlan === 'sixmonths'
+      ? `${prices.sixmonths} / 6 Ay`
+      : selectedPlan === 'monthly'
+      ? `${prices.monthly} / Ay`
+      : `${prices.weekly} / Hafta`;
+
+  const handlePurchase = async () => {
+    if (loadingAction) return;
+    triggerHaptic('medium');
     setLoadingAction('purchase');
-    const sentToStoreKit = purchaseLifetimeProNatively();
-    if (!sentToStoreKit) {
-      // Web / Masaüstü test ortamında doğrudan simüle et
-      setTimeout(() => {
-        setLoadingAction(null);
-        onUnlockPro();
-        setStatusMessage({
-          type: 'success',
-          text: 'Tebrikler! Ömür Boyu Tam Erişim (Pro) başarıyla aktif edildi.'
-        });
-      }, 450);
-    }
-  };
-
-  const handleRestore = () => {
-    triggerNativeHaptic('selection');
     setStatusMessage(null);
-    setLoadingAction('restore');
-    const sentToStoreKit = restorePurchasesNatively();
-    if (!sentToStoreKit) {
-      setTimeout(() => {
-        setLoadingAction(null);
-        if (isPro) {
-          setStatusMessage({
-            type: 'success',
-            text: 'Ömür Boyu Tam Erişim satın alımınız başarıyla geri yüklendi!'
-          });
-        } else {
-          setStatusMessage({
-            type: 'info',
-            text: 'Bu cihaza ait önceki bir satın alım kaydı bulunamadı.'
-          });
-        }
-      }, 450);
+    const res = await purchasePlanNatively(activeProductId);
+    setLoadingAction(null);
+    if (res.success) {
+      setStatusMessage({ type: 'success', text: res.message });
+      onUnlockPro();
+      window.setTimeout(() => onClose(), 500);
+    } else if (res.cancelled) {
+      setStatusMessage({ type: 'info', text: res.message });
+    } else {
+      setStatusMessage({ type: 'error', text: res.message });
     }
   };
 
-  const remainingFree = Math.max(0, freeLimit - solvedCount);
+  const handleRestore = async () => {
+    if (loadingAction) return;
+    triggerHaptic('selection');
+    setLoadingAction('restore');
+    setStatusMessage(null);
+    const res = await restorePurchasesNativelyAsync();
+    setLoadingAction(null);
+    if (res.success) {
+      setStatusMessage({ type: 'success', text: res.message });
+      onUnlockPro();
+      window.setTimeout(() => onClose(), 600);
+    } else {
+      setStatusMessage({ type: 'info', text: res.message });
+    }
+  };
+
+  const totalFmt = TOTAL_INTERACTIVE_LEGAL_ITEMS.toLocaleString('tr-TR');
+  const vakaFmt = LEGAL_VAKA_QUESTIONS.length.toLocaleString('tr-TR');
+  const spotFmt = LEGAL_SPOT_CARDS.length.toLocaleString('tr-TR');
+
+  const features = [
+    `${totalFmt}+ Doğrulanmış Soru (${vakaFmt} 5 Şıklı Olay + ${spotFmt} D/Y Kartı)`,
+    'HMGS • İYÖS • Adli/İdari Hakimlik • KPSS Hukuk (14 Branş)',
+    '2021–2026 ÖSYM Konsept İkizleri & 8./9. Yargı Paketi Güncel Mevzuat',
+    'Süreli Sınav Provaları, Hata Defteri ve Süreler/Mahkemeler Atlası'
+  ];
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="paywall-title"
     >
-      <div className="relative w-full max-w-md rounded-3xl bg-white dark:bg-[#0F1626] border border-slate-200/90 dark:border-indigo-500/30 shadow-2xl overflow-hidden my-auto">
-        {/* Üst Başlık — Rozet ve Kapatma Butonu Çakışmasız Yan Yana */}
-        <div className="px-4 sm:px-6 pt-4 sm:pt-5 pb-4 bg-gradient-to-br from-indigo-950 via-[#151C36] to-slate-950 text-white border-b border-indigo-500/20">
+      <div className="relative w-full max-w-md max-h-[94vh] overflow-y-auto rounded-3xl bg-white dark:bg-[#0D1322] border border-indigo-200 dark:border-indigo-500/35 shadow-2xl my-auto">
+        {/* Top Vibrant Header — Badge & Close side-by-side (Zero Overlap!) */}
+        <div className="px-4 sm:px-5 pt-4 pb-3.5 bg-gradient-to-br from-indigo-700 via-violet-700 to-indigo-900 text-white border-b border-white/10">
           <div className="flex items-center justify-between gap-2 mb-2.5">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 text-[10px] sm:text-[11px] font-bold tracking-wide uppercase min-w-0">
-              <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="truncate">Tek Seferlik • Ömür Boyu Erişim</span>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-400/20 border border-amber-300/40 text-amber-200 text-[10.5px] font-extrabold tracking-wide uppercase min-w-0">
+              <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span className="truncate">HMGS • İYÖS • Hakimlik • KPSS PRO</span>
             </div>
 
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                triggerHaptic('light');
+                onClose();
+              }}
               aria-label="Kapat"
-              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-200 transition-colors cursor-pointer shrink-0"
+              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center text-white transition cursor-pointer shrink-0"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <h2 id="paywall-title" className="font-display font-extrabold text-lg sm:text-xl text-white leading-snug">
-            HMGS Tuzak Avcısı — Tam Erişim (Pro)
-          </h2>
-          <p className="text-xs text-indigo-200/90 mt-1 leading-relaxed">
-            {triggerReason ||
-              'Tüm 1.380+ kanun maddesi tuzağına, kapsamlı HMGS deneme sınavlarına ve tekrar sepetlerine sınırsız erişin.'}
-          </p>
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+              <Scale className="w-5 h-5 text-amber-300" />
+            </div>
+            <div className="min-w-0">
+              <h2 id="paywall-title" className="font-display font-extrabold text-base sm:text-lg leading-snug">
+                Hukuk Sınavları PRO Erişim
+              </h2>
+              <p className="text-[11.5px] text-indigo-100/90 leading-snug mt-0.5">
+                {triggerReason ||
+                  (solvedCount >= freeLimit
+                    ? `Ücretsiz ${freeLimit} soru kotanız doldu (${solvedCount}/${freeLimit}). Sınırsız devam edin.`
+                    : `30 soruluk demo sınırını kaldırın, ${totalFmt}+ sorunun tamamını açın.`)}
+              </p>
+            </div>
+          </div>
         </div>
 
-        {/* İçerik Gövdesi — Kompakt & Her Cihazda Tek Ekrana Sığan Tasarım */}
-        <div className="p-4 sm:p-5 space-y-3.5">
-          {/* Ücretsiz Kota Durumu */}
-          {!isPro && (
-            <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800">
-              <div className="flex items-center gap-2 min-w-0">
-                <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">
-                  Ücretsiz Kota: {Math.min(solvedCount, freeLimit)} / {freeLimit} Soru
-                </span>
+        {/* Body */}
+        <div className="p-4 sm:p-5 space-y-3">
+          {/* Features */}
+          <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 p-3 space-y-1.5">
+            {features.map((feat, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-2 text-[11.5px] text-slate-700 dark:text-slate-200 leading-snug"
+              >
+                <CheckCircle2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                <span>{feat}</span>
               </div>
-              <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
-                {remainingFree > 0 ? `${remainingFree} Hak Kaldı` : 'Kota Doldu'}
-              </span>
+            ))}
+          </div>
+
+          {/* 3-Tier Subscription Selector: 6 Months (Recommended) | Monthly | Weekly */}
+          {!isPro && (
+            <div className="space-y-2">
+              {/* 6 Months */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('selection');
+                  setSelectedPlan('sixmonths');
+                }}
+                className={`w-full rounded-2xl border-2 p-3 text-left transition flex items-center justify-between gap-2 cursor-pointer ${
+                  selectedPlan === 'sixmonths'
+                    ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-600 dark:border-indigo-400 shadow-sm'
+                    : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                      6 Aylık Sınav Sezonu
+                    </span>
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-500 text-white text-[9.5px] font-extrabold uppercase">
+                      <Sparkles className="w-2.5 h-2.5" /> EN POPÜLER
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">
+                    Aylık ~150 ₺ • Haftalığa göre %62 tasarruf
+                  </div>
+                </div>
+                <div className="text-right shrink-0 pl-1">
+                  <div className="font-display font-black text-base sm:text-lg text-slate-900 dark:text-white whitespace-nowrap">
+                    {prices.sixmonths}
+                  </div>
+                  <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                    6 Ayda Bir
+                  </div>
+                </div>
+              </button>
+
+              {/* Monthly */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('selection');
+                  setSelectedPlan('monthly');
+                }}
+                className={`w-full rounded-2xl border-2 p-3 text-left transition flex items-center justify-between gap-2 cursor-pointer ${
+                  selectedPlan === 'monthly'
+                    ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-600 dark:border-indigo-400 shadow-sm'
+                    : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                      Aylık PRO Plan
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-[9.5px] font-bold">
+                      %38 Tasarruf
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Esnek aylık abonelik • İstediğin an iptal
+                  </div>
+                </div>
+                <div className="text-right shrink-0 pl-1">
+                  <div className="font-display font-black text-base sm:text-lg text-slate-900 dark:text-white whitespace-nowrap">
+                    {prices.monthly}
+                  </div>
+                  <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                    Aylık
+                  </div>
+                </div>
+              </button>
+
+              {/* Weekly */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('selection');
+                  setSelectedPlan('weekly');
+                }}
+                className={`w-full rounded-2xl border-2 p-3 text-left transition flex items-center justify-between gap-2 cursor-pointer ${
+                  selectedPlan === 'weekly'
+                    ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-600 dark:border-indigo-400 shadow-sm'
+                    : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                    Haftalık Hızlı Kamp
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Sınav haftası yoğun tekrar ve denemeler
+                  </div>
+                </div>
+                <div className="text-right shrink-0 pl-1">
+                  <div className="font-display font-black text-base sm:text-lg text-slate-900 dark:text-white whitespace-nowrap">
+                    {prices.weekly}
+                  </div>
+                  <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                    Haftalık
+                  </div>
+                </div>
+              </button>
             </div>
           )}
 
-          {/* Özellik Listesi */}
-          <div className="space-y-2.5">
-            <div className="flex items-start gap-2.5">
-              <div className="w-7 h-7 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight">
-                  1.380+ Mevzuat ve Tuzak Soru Kartı (7 Branş)
-                </h3>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
-                  HMK, CMK & TCK, İYUK, Anayasa, TMK & TBK, TTK & İİK ve Avukatlık hukukunda sınırsız soru çözümü.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-2.5">
-              <div className="w-7 h-7 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <Timer className="w-3.5 h-3.5 text-emerald-500" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight">
-                  25, 40 ve Özel Süreli HMGS Deneme Sınavları
-                </h3>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
-                  ÖSYM 70 puan barajına göre süreli sınav provası ve detaylı branş karnesi.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-2.5">
-              <div className="w-7 h-7 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <Layers className="w-3.5 h-3.5 text-amber-500" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight">
-                  Sınırsız Soru Sepetleri & Gelecek Güncellemeler
-                </h3>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 leading-snug">
-                  Doğrular, Yanlışlar ve Kaydedilenler sepetleri ile tüm yeni mevzuat paketlerine ömür boyu erişim.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Fiyat Kartı */}
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-amber-500/10 border-2 border-indigo-500/40 flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                <Sparkles className="w-3 h-3 shrink-0" /> Ömür Boyu Lisans (Abonelik Yok)
-              </span>
-              <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
-                Tek seferlik ödeme • Aylık yenileme yoktur
-              </div>
-            </div>
-            <div className="text-right shrink-0 pl-2">
-              <div className="font-display font-black text-xl sm:text-2xl text-slate-900 dark:text-white whitespace-nowrap">
-                {displayPrice}
-              </div>
-              <div className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                Ömür Boyu
-              </div>
-            </div>
-          </div>
-
-          {/* Durum Mesajı */}
+          {/* Status Message */}
           {statusMessage && (
             <div
               className={`px-3.5 py-2.5 rounded-2xl text-xs font-semibold flex items-center gap-2 border ${
@@ -263,11 +320,11 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
             </div>
           )}
 
-          {/* Satın Alma & Geri Yükleme Butonları */}
+          {/* Purchase & Restore CTAs */}
           {isPro ? (
             <div className="py-3 px-4 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm text-center flex items-center justify-center gap-2">
               <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>Ömür Boyu Tam Erişim (Pro) Aktif</span>
+              <span>Hukuk Sınavları PRO Tam Erişim Aktif</span>
             </div>
           ) : (
             <div className="space-y-2">
@@ -275,13 +332,13 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 type="button"
                 disabled={loadingAction !== null}
                 onClick={handlePurchase}
-                className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-display font-bold text-xs sm:text-sm shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-indigo-600 via-violet-600 to-indigo-600 hover:brightness-110 text-white font-display font-extrabold text-xs sm:text-sm shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60 whitespace-nowrap"
               >
                 <Crown className="w-4 h-4 text-amber-300 shrink-0" />
                 <span>
                   {loadingAction === 'purchase'
                     ? 'App Store Bağlanıyor...'
-                    : `Ömür Boyu Tam Erişimi Aç • ${displayPrice}`}
+                    : `PRO Başlat • ${activeCtaPrice}`}
                 </span>
               </button>
 
@@ -289,46 +346,51 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 type="button"
                 disabled={loadingAction !== null}
                 onClick={handleRestore}
-                className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-60"
               >
                 <RotateCcw className="w-3.5 h-3.5 shrink-0" />
                 <span>
                   {loadingAction === 'restore'
-                    ? 'Satın Alımlar Kontrol Ediliyor...'
+                    ? 'Abonelikler Kontrol Ediliyor...'
                     : 'Satın Alımları Geri Yükle'}
                 </span>
               </button>
             </div>
           )}
 
-          {/* Alt Yasal Linkler */}
-          <div className="pt-1.5 border-t border-slate-200/80 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400">
-            <span>Apple Kimliğiniz ile tek seferlik güvenli ödeme</span>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setLegalDoc('privacy')}
-                className="hover:text-indigo-500 underline cursor-pointer"
-              >
-                Gizlilik Politikası
-              </button>
-              <button
-                type="button"
-                onClick={() => setLegalDoc('terms')}
-                className="hover:text-indigo-500 underline cursor-pointer"
-              >
-                Kullanım Koşulları
-              </button>
+          {/* Apple Guideline 3.1.2 Auto-Renewal Disclosure + Legal Links */}
+          <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/80 space-y-1.5 text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+            <p>
+              Ödeme, satın alma onayıyla Apple Kimliği hesabınızdan tahsil edilir. Mevcut dönemin bitiminden en az 24 saat önce iptal edilmedikçe abonelik otomatik olarak yenilenir. Aboneliğinizi iPhone/iPad Ayarlar &gt; Apple Kimliği &gt; Abonelikler bölümünden yönetebilir veya iptal edebilirsiniz.
+            </p>
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <span className="font-medium">Apple ile Güvenli Ödeme</span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setLegalDoc('privacy')}
+                  className="hover:text-indigo-500 underline cursor-pointer font-semibold"
+                >
+                  Gizlilik Politikası
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLegalDoc('terms')}
+                  className="hover:text-indigo-500 underline cursor-pointer font-semibold"
+                >
+                  Kullanım Koşulları (EULA)
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Uygulama İçi Yasal Metin Okuyucu (iPad & iPhone Uyumlu) */}
+        {/* In-App Legal Reader Overlay (iPad & iPhone Safe) */}
         {legalDoc && (
-          <div className="absolute inset-0 z-20 bg-white dark:bg-[#0F1626] flex flex-col">
+          <div className="absolute inset-0 z-20 bg-white dark:bg-[#0D1322] flex flex-col">
             <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800">
               <h3 className="font-display font-bold text-sm text-slate-900 dark:text-white">
-                {legalDoc === 'privacy' ? 'Gizlilik Politikası' : 'Kullanım Koşulları'}
+                {legalDoc === 'privacy' ? 'Gizlilik Politikası' : 'Kullanım Koşulları & Abonelik Şartları'}
               </h3>
               <button
                 type="button"
@@ -342,22 +404,25 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
               {legalDoc === 'privacy' ? (
                 <>
                   <p>
-                    <strong>HMGS Tuzak Avcısı</strong> tamamen cihaz içi (offline-first) çalışır. Ad-soyad, telefon, T.C. kimlik numarası veya e-posta adresi gibi kişisel verileriniz toplanmaz ve harici sunuculara gönderilmez.
+                    <strong>HMGS • İYÖS • Hakimlik Hukuk</strong> tamamen cihaz içi (offline-first) çalışır. Ad, telefon, T.C. kimlik numarası veya e-posta gibi kişisel verileriniz toplanmaz ve harici sunuculara gönderilmez.
                   </p>
                   <p>
-                    Çözdüğünüz sorular, hata sepetiniz, çalışma istatistikleriniz ve tema tercihleriniz yalnızca kendi cihazınızda saklanır. Üçüncü taraf reklam veya takip SDK&apos;sı içermez.
+                    Çözülen sorular, hata defteri, sınav denemeleri ve çalışma istatistikleriniz yalnızca kendi cihazınızda saklanır. Üçüncü taraf reklam veya takip SDK&apos;sı kullanılmaz.
                   </p>
                   <p>İletişim: tahafirat@gmail.com</p>
                 </>
               ) : (
                 <>
                   <p>
-                    <strong>Ömür Boyu Tam Erişim (Pro)</strong>, tek seferlik ({displayPrice}) bir Uygulama İçi Satın Alma (Non-Consumable) lisansıdır; abonelik veya otomatik yenileme içermez. Ödeme Apple Kimliğiniz üzerinden tahsil edilir ve aynı Apple Kimliğiyle &quot;Satın Alımları Geri Yükle&quot; seçeneği üzerinden tüm cihazlarınızda kullanılabilir.
+                    <strong>Hukuk Sınavları PRO Abonelikleri:</strong> Haftalık ({prices.weekly}), Aylık ({prices.monthly}) ve 6 Aylık ({prices.sixmonths}) otomatik yenilenen abonelik seçenekleri sunulur. Abonelik, dönem bitiminden en az 24 saat önce Apple Hesap Ayarlarından iptal edilmedikçe seçilen dönem için otomatik yenilenir.
                   </p>
                   <p>
-                    Uygulamadaki soru kartları ve açıklamalar HMGS hazırlık amacıyla hazırlanmış eğitim içeriğidir; resmi hukuki danışmanlık yerine geçmez.
+                    Önceki sürümlerde Ömür Boyu PRO satın alan kullanıcılar &quot;Satın Alımları Geri Yükle&quot; butonuyla sınırsız erişimlerini kullanmaya devam edebilir.
                   </p>
-                  <p>Destek: tahafirat@gmail.com</p>
+                  <p>
+                    Uygulamadaki tüm 33.000+ soru, olay ve mevzuat açıklamaları 2026 güncel Türk hukuku çerçevesinde özgün eğitim materyali olarak hazırlanmıştır; resmi hukuki danışmanlık yerine geçmez.
+                  </p>
+                  <p>Standart Apple EULA: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/</p>
                 </>
               )}
             </div>

@@ -1,713 +1,341 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Award,
   BookOpen,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
-  Filter,
-  Flame,
-  Layers,
+  Lock,
   Play,
   RotateCcw,
+  Scale,
   Search,
-  ShieldAlert,
   Sparkles,
-  Target,
   Timer,
   Trophy,
-  XCircle,
-  ChevronRight,
-  ChevronLeft,
-  Scale,
-  AlertTriangle
+  XCircle
 } from 'lucide-react';
 import {
-  BRANCH_META,
-  FILTER_PILLS,
-  FilterPillCategory,
-  formatBranchHeader,
-  formatFocusBadge,
-  matchesFilterCategory,
-  TrapCard,
-  TrapCategory
-} from '../types/hmgs';
-import { ALL_HMGS_STATUTORY_RULES } from '../data/hmgsStatuteRepository';
+  LEGAL_BRANCHES,
+  LEGAL_VAKA_QUESTIONS
+} from '../data/legalQuestionRepository';
+import { LEGAL_REFERENCE_GUIDE } from '../data/legalReferenceGuide';
+import { LegalBranchId, LegalExamType, LegalVakaQuestion, OptionLetter } from '../types/legalEngine';
+import { LegalExamAttempt, LegalStudyState } from '../services/legalStudyStorage';
+import { triggerHaptic } from '../services/nativeBridge';
 
 interface DenemeSinavScreenProps {
-  cards: TrapCard[];
-  solvedCardMap: Record<string, boolean>;
-  onRecordAnswer: (card: TrapCard, isUserCorrect: boolean) => void;
-  isPro?: boolean;
-  onOpenPaywall?: (reason?: string) => void;
+  studyState: LegalStudyState;
+  isPro: boolean;
+  onSaveAttempt: (attempt: LegalExamAttempt) => void;
+  onRecordVaka: (q: LegalVakaQuestion, selected: OptionLetter, isCorrect: boolean) => void;
+  onOpenPaywall: (reason?: string) => void;
 }
 
 type SubView = 'deneme' | 'atlas';
-type ExamPresetId = 'quick-15' | 'full-40' | 'traps-25' | 'custom';
-type ExamFeedbackMode = 'instant' | 'end-of-exam';
+type PresetId = 'quick-15' | 'hmgs-40' | 'iyos-30' | 'hakimlik-40' | 'kpss-30' | 'custom';
 
-interface ExamSession {
+interface ActiveExam {
   title: string;
-  questions: TrapCard[];
-  answers: Record<string, boolean>; // cardId -> userChoseCorrect (true = DOĞRU, false = TUZAK VAR)
+  examType: LegalExamType | 'KARMA';
+  questions: LegalVakaQuestion[];
+  answers: Record<string, OptionLetter>;
   startedAt: number;
   durationSeconds: number;
-  feedbackMode: ExamFeedbackMode;
   isFinished: boolean;
 }
 
-function getBaseRuleId(cardId: string): string {
-  return cardId.replace(/-(true|trap1|trap2|cross)$/, '');
-}
-
-function matchesTrapCategoryFilter(cardCategory: TrapCategory, filter: TrapCategory | 'Tümü'): boolean {
-  if (filter === 'Tümü') return true;
-  if (filter === 'Oran/Nisap Tuzağı' || filter === 'Çoğunluk Tuzağı') {
-    return cardCategory === 'Oran/Nisap Tuzağı' || cardCategory === 'Çoğunluk Tuzağı';
-  }
-  return cardCategory === filter;
-}
-
-function buildSmartExamDeck(
-  allCards: TrapCard[],
-  solvedCardMap: Record<string, boolean>,
+function sampleUniqueExamQuestions(
   count: number,
-  branchFilter: FilterPillCategory,
-  trapFilter: TrapCategory | 'Tümü',
-  prioritizeUnsolved: boolean
-): TrapCard[] {
-  const pool = allCards.filter((card) => {
-    const branchMatch = matchesFilterCategory(card.branch, branchFilter);
-    const trapMatch = matchesTrapCategoryFilter(card.trapCategory, trapFilter);
-    return branchMatch && trapMatch;
+  examFilter: 'ALL' | LegalExamType,
+  branchFilter: 'ALL' | LegalBranchId,
+  vakaAnswers: LegalStudyState['vakaAnswers']
+): LegalVakaQuestion[] {
+  const pool = LEGAL_VAKA_QUESTIONS.filter((q) => {
+    if (examFilter !== 'ALL' && !q.exams.includes(examFilter)) return false;
+    if (branchFilter !== 'ALL' && q.branchId !== branchFilter) return false;
+    return true;
   });
 
-  // Karıştır (Fisher-Yates)
-  const shuffled = [...pool];
-  for (let i = shuffled.length - 1; i > 0; i--) {
+  // Fisher-Yates shuffle on a lightweight index array
+  const indices = Array.from({ length: pool.length }, (_, i) => i);
+  for (let i = indices.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    [indices[i], indices[j]] = [indices[j], indices[i]];
   }
 
-  // Çözülmemiş veya yanlış yapılmış kartları öne al
-  if (prioritizeUnsolved) {
-    shuffled.sort((a, b) => {
-      const aState = solvedCardMap[a.id]; // undefined = çözülmedi, false = yanlış, true = doğru
-      const bState = solvedCardMap[b.id];
-      const aScore = aState === false ? 0 : aState === undefined ? 1 : 2;
-      const bScore = bState === false ? 0 : bState === undefined ? 1 : 2;
-      return aScore - bScore;
-    });
-  }
+  // Prefer unsolved & one question per cluster-entity so no duplicate legal concepts appear in one exam
+  const selected: LegalVakaQuestion[] = [];
+  const usedEntityKey = new Set<string>();
 
-  // Aynı kanun kuralının (rule-hmk-1-true ve rule-hmk-1-trap1 gibi) aynı sınavda iki kez çıkmamasını sağla
-  const selected: TrapCard[] = [];
-  const usedBaseRules = new Set<string>();
-
-  for (const card of shuffled) {
-    if (selected.length >= count) break;
-    const baseRule = getBaseRuleId(card.id);
-    if (!usedBaseRules.has(baseRule)) {
-      usedBaseRules.add(baseRule);
-      selected.push(card);
-    }
-  }
-
-  // Eğer benzersiz kural sayısı istenen soru sayısından azsa kalanları tamamla
-  if (selected.length < count) {
-    const selectedIds = new Set(selected.map((c) => c.id));
-    for (const card of shuffled) {
+  for (const pass of [0, 1]) {
+    for (const idx of indices) {
       if (selected.length >= count) break;
-      if (!selectedIds.has(card.id)) {
-        selected.push(card);
-        selectedIds.add(card.id);
-      }
+      const q = pool[idx];
+      if (pass === 0 && vakaAnswers[q.id]) continue;
+      // q.id format: lv-{branch}-c{cIdx}-e{eIdx}-a{aIdx}
+      const entityKey = q.id.replace(/-a\d+$/, '');
+      if (usedEntityKey.has(entityKey)) continue;
+      usedEntityKey.add(entityKey);
+      selected.push(q);
     }
-  }
-
-  // Seçilen soruları tekrar karıştır ki doğru/yanlış veya zorluk sırası belli olmasın
-  for (let i = selected.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [selected[i], selected[j]] = [selected[j], selected[i]];
   }
 
   return selected;
 }
 
 export const DenemeSinavScreen: React.FC<DenemeSinavScreenProps> = ({
-  cards,
-  solvedCardMap,
-  onRecordAnswer,
-  isPro = false,
+  studyState,
+  isPro,
+  onSaveAttempt,
+  onRecordVaka,
   onOpenPaywall
 }) => {
-  const [subView, setSubView] = useState<'deneme' | 'atlas'>('deneme');
-
-  // Deneme ayarları
-  const [selectedPreset, setSelectedPreset] = useState<ExamPresetId>('quick-15');
-  const [customBranch, setCustomBranch] = useState<FilterPillCategory>('Tümü');
-  const [customTrapType, setCustomTrapType] = useState<TrapCategory | 'Tümü'>('Tümü');
+  const [subView, setSubView] = useState<SubView>('deneme');
+  const [customBranch, setCustomBranch] = useState<'ALL' | LegalBranchId>('ALL');
   const [customCount, setCustomCount] = useState<number>(20);
-  const [feedbackMode, setFeedbackMode] = useState<ExamFeedbackMode>('instant');
-  const [prioritizeUnsolved, setPrioritizeUnsolved] = useState<boolean>(true);
+  const [session, setSession] = useState<ActiveExam | null>(null);
+  const [currentIdx, setCurrentIdx] = useState<number>(0);
+  const [elapsedSec, setElapsedSec] = useState<number>(0);
 
-  // Aktif sınav oturumu
-  const [session, setSession] = useState<ExamSession | null>(null);
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
-
-  // Atlas filtreleri
+  // Atlas state
   const [atlasSearch, setAtlasSearch] = useState<string>('');
-  const [atlasBranch, setAtlasBranch] = useState<FilterPillCategory>('Tümü');
-  const [atlasTrapFilter, setAtlasTrapFilter] = useState<TrapCategory | 'Tümü'>('Tümü');
+  const [atlasCategory, setAtlasCategory] = useState<string>('Tümü');
 
-  // Sınav sayacı
   useEffect(() => {
     if (!session || session.isFinished) return;
-    const interval = window.setInterval(() => {
-      setElapsedSeconds((prev) => {
+    const t = window.setInterval(() => {
+      setElapsedSec((prev) => {
         const next = prev + 1;
         if (next >= session.durationSeconds) {
-          setSession((curr) => (curr ? { ...curr, isFinished: true } : null));
+          finishExam(session, next);
         }
         return next;
       });
     }, 1000);
-    return () => window.clearInterval(interval);
+    return () => window.clearInterval(t);
   }, [session]);
 
-  const startExam = (
-    title: string,
-    count: number,
-    durationMinutes: number,
-    branch: FilterPillCategory,
-    trap: TrapCategory | 'Tümü'
-  ) => {
-    const questions = buildSmartExamDeck(
-      cards,
-      solvedCardMap,
-      count,
-      branch,
-      trap,
-      prioritizeUnsolved
-    );
+  const finishExam = (active: ActiveExam, durationUsed: number) => {
+    if (active.isFinished) return;
+    let correct = 0;
+    let wrong = 0;
+    let blank = 0;
+    for (const q of active.questions) {
+      const sel = active.answers[q.id];
+      if (!sel) {
+        blank++;
+      } else if (sel === q.correctOption) {
+        correct++;
+        onRecordVaka(q, sel, true);
+      } else {
+        wrong++;
+        onRecordVaka(q, sel, false);
+      }
+    }
+    const score100 = Math.round((correct / Math.max(1, active.questions.length)) * 100);
+    const attempt: LegalExamAttempt = {
+      id: `exam-${Date.now()}`,
+      examTitle: active.title,
+      examType: active.examType,
+      dateIso: new Date().toISOString(),
+      totalQuestions: active.questions.length,
+      correctCount: correct,
+      wrongCount: wrong,
+      blankCount: blank,
+      score100,
+      passed70: score100 >= 70,
+      durationSeconds: durationUsed
+    };
+    onSaveAttempt(attempt);
+    setSession({ ...active, isFinished: true });
+    triggerHaptic(score100 >= 70 ? 'success' : 'warning');
+  };
+
+  const startPreset = (preset: PresetId) => {
+    if (!isPro && preset !== 'quick-15') {
+      triggerHaptic('warning');
+      onOpenPaywall(
+        'HMGS 40 Soru, İYÖS, Hakimlik, KPSS Hukuk ve Özel Deneme sınavları PRO aboneliği ile sınırsız açılır.'
+      );
+      return;
+    }
+
+    let title = 'Hızlı Karma Deneme (15 Soru)';
+    let examType: LegalExamType | 'KARMA' = 'KARMA';
+    let count = 15;
+    let examFilter: 'ALL' | LegalExamType = 'ALL';
+    let branchFilter: 'ALL' | LegalBranchId = 'ALL';
+    let duration = 20 * 60;
+
+    if (preset === 'hmgs-40') {
+      title = 'HMGS 2026 Tam Prova (40 Soru)';
+      examType = 'HMGS';
+      examFilter = 'HMGS';
+      count = 40;
+      duration = 55 * 60;
+    } else if (preset === 'iyos-30') {
+      title = 'İYÖS İdari Yargı Provası (30 Soru)';
+      examType = 'IYOS';
+      examFilter = 'IYOS';
+      count = 30;
+      duration = 40 * 60;
+    } else if (preset === 'hakimlik-40') {
+      title = 'Adli & İdari Hakimlik Denemesi (40 Soru)';
+      examType = 'HAKIMLIK';
+      examFilter = 'HAKIMLIK';
+      count = 40;
+      duration = 55 * 60;
+    } else if (preset === 'kpss-30') {
+      title = 'KPSS A Grubu Hukuk Denemesi (30 Soru)';
+      examType = 'KPSS';
+      examFilter = 'KPSS';
+      count = 30;
+      duration = 40 * 60;
+    } else if (preset === 'custom') {
+      title = `Özel Hukuk Denemesi (${customCount} Soru)`;
+      branchFilter = customBranch;
+      count = customCount;
+      duration = Math.max(10, Math.round(customCount * 1.4)) * 60;
+    }
+
+    const qs = sampleUniqueExamQuestions(count, examFilter, branchFilter, studyState.vakaAnswers);
+    triggerHaptic('medium');
+    setElapsedSec(0);
+    setCurrentIdx(0);
     setSession({
       title,
-      questions,
+      examType,
+      questions: qs,
       answers: {},
       startedAt: Date.now(),
-      durationSeconds: durationMinutes * 60,
-      feedbackMode,
+      durationSeconds: duration,
       isFinished: false
     });
-    setCurrentIndex(0);
-    setElapsedSeconds(0);
-    setSubView('deneme');
   };
 
-  const handleStartPreset = () => {
-    if (selectedPreset !== 'quick-15' && !isPro) {
-      onOpenPaywall?.(
-        '25 ve 40 soruluk kapsamlı HMGS deneme sınavları ile özel sınav oluşturucu Ömür Boyu Tam Erişim (49,99 ₺) paketine dahildir.'
-      );
-      return;
-    }
-    if (selectedPreset === 'quick-15') {
-      startExam('Hızlı HMGS Tuzak Taraması (15 Soru)', 15, 12, 'Tümü', 'Tümü');
-    } else if (selectedPreset === 'full-40') {
-      startExam('Kapsamlı HMGS Baraj Provası (40 Soru)', 40, 35, 'Tümü', 'Tümü');
-    } else if (selectedPreset === 'traps-25') {
-      startExam('Kritik Süre & Nitelikli Çoğunluk Denemesi (25 Soru)', 25, 20, 'Tümü', 'Süre Tuzağı');
-    } else {
-      startExam(
-        `${customBranch} • Özel Dinamik Deneme (${customCount} Soru)`,
-        customCount,
-        Math.max(10, Math.round(customCount * 0.85)),
-        customBranch,
-        customTrapType
-      );
-    }
-  };
-
-  const handleAnswerQuestion = (userSaysCorrect: boolean) => {
-    if (!session || session.isFinished) return;
-    const currentCard = session.questions[currentIndex];
-    if (!currentCard) return;
-
-    // Anında çözümlü modda bir kez cevaplandıysa tekrar değiştirmesin
-    if (session.feedbackMode === 'instant' && session.answers[currentCard.id] !== undefined) {
-      return;
-    }
-
-    const isAlreadyRecorded = session.answers[currentCard.id] !== undefined;
-    const isUserRight = userSaysCorrect === currentCard.isCorrect;
-
-    setSession((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        answers: {
-          ...prev.answers,
-          [currentCard.id]: userSaysCorrect
-        }
-      };
+  const filteredAtlas = useMemo(() => {
+    const ql = atlasSearch.trim().toLowerCase();
+    return LEGAL_REFERENCE_GUIDE.filter((item) => {
+      if (atlasCategory !== 'Tümü' && item.category !== atlasCategory) return false;
+      if (!ql) return true;
+      return `${item.title} ${item.articleRef} ${item.correctRule} ${item.commonTrap}`
+        .toLowerCase()
+        .includes(ql);
     });
+  }, [atlasSearch, atlasCategory]);
 
-    if (!isAlreadyRecorded) {
-      onRecordAnswer(currentCard, isUserRight);
-    }
-
-    // Gerçek sınav modundaysa otomatik sonraki soruya geç
-    if (session.feedbackMode === 'end-of-exam' && currentIndex < session.questions.length - 1) {
-      window.setTimeout(() => {
-        setCurrentIndex((idx) => Math.min(session.questions.length - 1, idx + 1));
-      }, 180);
-    }
-  };
-
-  const finishExam = () => {
-    if (!session) return;
-    setSession({ ...session, isFinished: true });
-  };
-
-  const formatTimer = (secondsLeft: number) => {
-    const safe = Math.max(0, secondsLeft);
-    const m = Math.floor(safe / 60);
-    const s = safe % 60;
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  // Atlas verisi
-  const filteredAtlasRules = useMemo(() => {
-    const q = atlasSearch.trim().toLocaleLowerCase('tr-TR');
-    return ALL_HMGS_STATUTORY_RULES.filter((rule) => {
-      const branchMatch = matchesFilterCategory(rule.branch, atlasBranch);
-      const trapMatch =
-        atlasTrapFilter === 'Tümü' ||
-        matchesTrapCategoryFilter(rule.trap1.category, atlasTrapFilter) ||
-        matchesTrapCategoryFilter(rule.trap2.category, atlasTrapFilter);
-      if (!branchMatch || !trapMatch) return false;
-      if (!q) return true;
-      return (
-        rule.branch.toLocaleLowerCase('tr-TR').includes(q) ||
-        rule.subTopic.toLocaleLowerCase('tr-TR').includes(q) ||
-        rule.articleRef.toLocaleLowerCase('tr-TR').includes(q) ||
-        rule.trueStatement.toLocaleLowerCase('tr-TR').includes(q) ||
-        rule.trueCorrectPhrase.toLocaleLowerCase('tr-TR').includes(q)
-      );
-    });
-  }, [atlasSearch, atlasBranch, atlasTrapFilter]);
-
-  const unsolvedTotalCount = useMemo(() => {
-    return cards.filter((c) => solvedCardMap[c.id] === undefined).length;
-  }, [cards, solvedCardMap]);
-
-  // ============================================================================
-  // AKTİF SINAV EKRANI VEYA SONUÇ KARNESİ
-  // ============================================================================
-  if (session && subView === 'deneme') {
-    const totalQuestions = session.questions.length;
+  // Active Exam Runner
+  if (session && !session.isFinished) {
+    const q = session.questions[currentIdx];
+    const remaining = Math.max(0, session.durationSeconds - elapsedSec);
     const answeredCount = Object.keys(session.answers).length;
-    const remainingSeconds = session.durationSeconds - elapsedSeconds;
-
-    if (session.isFinished) {
-      let correctCount = 0;
-      let wrongCount = 0;
-      const wrongCards: TrapCard[] = [];
-
-      session.questions.forEach((q) => {
-        const userChoice = session.answers[q.id];
-        if (userChoice === undefined) return;
-        if (userChoice === q.isCorrect) {
-          correctCount++;
-        } else {
-          wrongCount++;
-          wrongCards.push(q);
-        }
-      });
-
-      const score100 = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
-      const passedBaraj = score100 >= 70;
-
-      return (
-        <div className="space-y-6 pb-8">
-          {/* Sonuç Özeti */}
-          <div className="rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-xl">
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-6">
-              <div>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                  <Trophy className="h-3.5 w-3.5" />
-                  SINAV SONUÇ KARNESİ
-                </span>
-                <h2 className="mt-2 text-2xl font-extrabold text-slate-900 dark:text-white">
-                  {session.title}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  Tamamlanma Süresi: {formatTimer(elapsedSeconds)} • Yanlış yapılan tüm sorular otomatik olarak Yanlışlar Kasasına (SM-2) eklendi.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setSession(null)}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 transition"
-                >
-                  <RotateCcw className="h-4 w-4" />
-                  Yeni Deneme Seç
-                </button>
-                <button
-                  onClick={handleStartPreset}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-600/25 hover:bg-indigo-500 transition"
-                >
-                  <Play className="h-4 w-4" />
-                  Farklı Sorularla Tekrar Başlat
-                </button>
-              </div>
-            </div>
-
-            {/* Puan & Baraj Kartları */}
-            <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-              <div
-                className={`rounded-2xl p-4 border ${
-                  passedBaraj
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
-                    : 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'
-                }`}
-              >
-                <div className="text-[11px] font-bold uppercase tracking-wider opacity-80">
-                  HMGS Simülasyon Puanı
-                </div>
-                <div className="mt-1 text-3xl font-black">{score100} / 100</div>
-                <div className="mt-1 text-xs font-semibold">
-                  {passedBaraj ? '✓ 70 Barajı Geçildi' : '✗ 70 Barajının Altında'}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200/70 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-4">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  Doğru Yakalanan
-                </div>
-                <div className="mt-1 text-3xl font-black text-emerald-600 dark:text-emerald-400">
-                  {correctCount}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">Toplam {totalQuestions} soruda</div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200/70 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-4">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  Tuzağa Düşülen
-                </div>
-                <div className="mt-1 text-3xl font-black text-rose-600 dark:text-rose-400">
-                  {wrongCount}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">Kasaya kaydedildi</div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200/70 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-4">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  Boş Bırakılan
-                </div>
-                <div className="mt-1 text-3xl font-black text-amber-600 dark:text-amber-400">
-                  {totalQuestions - answeredCount}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">Cevaplanmayan önerme</div>
-              </div>
-            </div>
-
-            {/* Tüm Soruların Detaylı Çözüm İncelemesi */}
-            <div className="mt-8 space-y-3">
-              <h3 className="text-sm font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-300">
-                Sınav Soruları & Mevzuat Çözüm Analizi ({session.questions.length} Soru)
-              </h3>
-              <div className="space-y-3">
-                {session.questions.map((q, idx) => {
-                  const userAns = session.answers[q.id];
-                  const isRight = userAns !== undefined && userAns === q.isCorrect;
-                  return (
-                    <div
-                      key={q.id}
-                      className={`rounded-2xl border p-4 transition ${
-                        userAns === undefined
-                          ? 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30'
-                          : isRight
-                          ? 'border-emerald-500/25 bg-emerald-500/5'
-                          : 'border-rose-500/30 bg-rose-500/5'
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-slate-900 dark:bg-white text-xs font-black text-white dark:text-slate-900">
-                            {idx + 1}
-                          </span>
-                          <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                            {formatBranchHeader(q)} • {q.articleRef}
-                          </span>
-                          <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold text-amber-600 dark:text-amber-400">
-                            {q.trapCategory}
-                          </span>
-                        </div>
-                        <span
-                          className={`text-xs font-extrabold ${
-                            userAns === undefined
-                              ? 'text-slate-400'
-                              : isRight
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : 'text-rose-600 dark:text-rose-400'
-                          }`}
-                        >
-                          {userAns === undefined
-                            ? 'BOŞ BIRAKILDI'
-                            : isRight
-                            ? '✓ DOĞRU YANIT'
-                            : '✗ TUZAĞA DÜŞÜLDÜ'}
-                        </span>
-                      </div>
-
-                      <p className="mt-2.5 text-sm leading-relaxed text-slate-800 dark:text-slate-200">
-                        {q.statement}
-                      </p>
-
-                      <div className="mt-3 rounded-xl bg-white/80 dark:bg-slate-900/80 p-3 text-xs border border-slate-200/60 dark:border-slate-800">
-                        {!q.isCorrect && q.wrongPhrase && (
-                          <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                            <span className="line-through text-rose-600 dark:text-rose-400 font-semibold">
-                              {q.wrongPhrase}
-                            </span>
-                            <span className="text-slate-400">→</span>
-                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                              {q.correctPhrase}
-                            </span>
-                          </div>
-                        )}
-                        {q.isCorrect && (
-                          <div className="mb-1.5 font-bold text-emerald-600 dark:text-emerald-400">
-                            ✓ Doğru Kanun Hükmü: {q.correctPhrase}
-                          </div>
-                        )}
-                        <p className="text-slate-600 dark:text-slate-400">{q.explanation}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // Aktif Soru Görünümü
-    const currentCard = session.questions[currentIndex];
-    const userCurrentAnswer = session.answers[currentCard.id];
-    const showInstantReveal =
-      session.feedbackMode === 'instant' && userCurrentAnswer !== undefined;
-    const isCurrentRight = userCurrentAnswer === currentCard.isCorrect;
+    const chosen = session.answers[q.id];
 
     return (
-      <div className="space-y-5 pb-8">
-        {/* Üst Sınav Kontrol Barı */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3.5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-black text-sm">
-              {currentIndex + 1}/{totalQuestions}
-            </span>
-            <div>
-              <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
-                {session.title}
-              </h3>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Cevaplanan: {answeredCount} / {totalQuestions} •{' '}
-                {session.feedbackMode === 'instant' ? 'Anında Çözümlü Mod' : 'Gerçek Sınav Modu'}
-              </p>
+      <div className="space-y-3">
+        <div className="rounded-3xl bg-indigo-700 text-white p-4 flex flex-wrap items-center justify-between gap-2 shadow-md">
+          <div>
+            <div className="text-[11px] font-bold text-indigo-200">{session.title}</div>
+            <div className="text-sm font-black">
+              Soru {currentIdx + 1} / {session.questions.length} • İşaretlenen: {answeredCount}
             </div>
           </div>
-
-          <div className="flex items-center gap-2.5">
-            <div
-              className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-black border ${
-                remainingSeconds < 120
-                  ? 'bg-rose-500/10 text-rose-600 border-rose-500/30 animate-pulse'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
-              }`}
-            >
-              <Timer className="h-4 w-4 text-indigo-500" />
-              {formatTimer(remainingSeconds)}
+          <div className="flex items-center gap-2">
+            <div className="px-3 py-1.5 rounded-xl bg-black/25 font-mono text-sm font-extrabold flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-amber-300" />
+              {formatTime(remaining)}
             </div>
-
             <button
-              onClick={finishExam}
-              className="rounded-xl bg-rose-600 hover:bg-rose-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm transition"
+              type="button"
+              onClick={() => finishExam(session, elapsedSec)}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-400 text-slate-950 text-xs font-extrabold cursor-pointer"
             >
-              Sınavı Bitir & Karne
+              Sınavı Bitir
             </button>
           </div>
         </div>
 
-        {/* Numaralı Soru Paleti */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          {session.questions.map((q, idx) => {
-            const ans = session.answers[q.id];
-            const isAnswered = ans !== undefined;
-            const isRight = isAnswered && ans === q.isCorrect;
-            const isCurrent = idx === currentIndex;
-
-            let btnStyle =
-              'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800';
-            if (isAnswered) {
-              if (session.feedbackMode === 'instant') {
-                btnStyle = isRight
-                  ? 'bg-emerald-500 text-white border-emerald-500'
-                  : 'bg-rose-500 text-white border-rose-500';
-              } else {
-                btnStyle = 'bg-indigo-600 text-white border-indigo-600';
-              }
-            }
-
-            return (
-              <button
-                key={q.id}
-                onClick={() => setCurrentIndex(idx)}
-                className={`h-8 min-w-[2rem] px-2 rounded-lg border text-xs font-bold transition shrink-0 ${btnStyle} ${
-                  isCurrent ? 'ring-2 ring-indigo-500 ring-offset-2 dark:ring-offset-slate-950' : ''
-                }`}
-              >
-                {idx + 1}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Aktif Soru Kartı */}
-        <div className="rounded-3xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-xl bg-indigo-500/10 px-3 py-1 text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                {formatBranchHeader(currentCard)}
-              </span>
-              <span className="rounded-xl bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-slate-300">
-                {currentCard.articleRef}
-              </span>
-            </div>
-            <span
-              className={`rounded-xl px-3 py-1 text-xs font-bold ${
-                showInstantReveal
-                  ? currentCard.isCorrect
-                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                    : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-              }`}
-            >
-              {showInstantReveal
-                ? currentCard.isCorrect
-                  ? 'Doğru Kanun Metni'
-                  : currentCard.trapCategory
-                : formatFocusBadge(currentCard.trapCategory)}
+        <div className="rounded-3xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 p-4 sm:p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-[11px] font-extrabold">
+              {q.branchName}
+            </span>
+            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+              {q.subTopic}
             </span>
           </div>
 
-          <p className="mt-6 text-base sm:text-lg font-medium leading-relaxed text-slate-900 dark:text-slate-100">
-            {currentCard.statement}
+          <p className="text-sm sm:text-base font-semibold text-slate-900 dark:text-white leading-relaxed">
+            {q.stem}
           </p>
 
-          {/* Cevap Butonları */}
-          <div className="mt-8 grid grid-cols-2 gap-3.5">
-            <button
-              onClick={() => handleAnswerQuestion(false)}
-              className={`flex items-center justify-center gap-2 rounded-2xl border-2 py-4 px-4 text-xs sm:text-sm font-extrabold transition ${
-                userCurrentAnswer === false
-                  ? 'border-rose-600 bg-rose-600 text-white shadow-lg shadow-rose-600/25'
-                  : 'border-rose-500/30 bg-rose-500/5 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10'
-              }`}
-            >
-              <XCircle className="h-5 w-5 shrink-0" />
-              <span>TUZAK VAR (YANLIŞ)</span>
-            </button>
-
-            <button
-              onClick={() => handleAnswerQuestion(true)}
-              className={`flex items-center justify-center gap-2 rounded-2xl border-2 py-4 px-4 text-xs sm:text-sm font-extrabold transition ${
-                userCurrentAnswer === true
-                  ? 'border-emerald-600 bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
-                  : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10'
-              }`}
-            >
-              <CheckCircle2 className="h-5 w-5 shrink-0" />
-              <span>DOĞRU (KANUN METNİ)</span>
-            </button>
-          </div>
-
-          {/* Anında Çözüm Kutusu */}
-          {showInstantReveal && (
-            <div
-              className={`mt-6 rounded-2xl border p-5 ${
-                isCurrentRight
-                  ? 'border-emerald-500/30 bg-emerald-500/10'
-                  : 'border-rose-500/30 bg-rose-500/10'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span
-                  className={`text-xs font-black uppercase tracking-wider ${
-                    isCurrentRight
-                      ? 'text-emerald-700 dark:text-emerald-300'
-                      : 'text-rose-700 dark:text-rose-300'
+          <div className="space-y-2">
+            {q.options.map((opt) => {
+              const selected = chosen === opt.letter;
+              return (
+                <button
+                  key={opt.letter}
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('selection');
+                    setSession((prev) =>
+                      prev ? { ...prev, answers: { ...prev.answers, [q.id]: opt.letter } } : prev
+                    );
+                  }}
+                  className={`w-full rounded-2xl border p-3 text-left flex items-start gap-2.5 transition cursor-pointer ${
+                    selected
+                      ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-600 text-indigo-950 dark:text-white ring-1 ring-indigo-500/30'
+                      : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
                   }`}
                 >
-                  {isCurrentRight
-                    ? '✓ Harika! ÖSYM Tuzağını Doğru Analiz Ettin'
-                    : '✗ Dikkat! Mevzuat Tuzağına Düştün (Yanlışlar Kasasına Eklendi)'}
-                </span>
-              </div>
-
-              {!currentCard.isCorrect && currentCard.wrongPhrase && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-                  <span className="rounded-lg bg-rose-500/20 px-2.5 py-1 font-bold text-rose-700 dark:text-rose-300 line-through">
-                    {currentCard.wrongPhrase}
+                  <span
+                    className={`w-6 h-6 rounded-lg text-xs font-black flex items-center justify-center shrink-0 ${
+                      selected
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    {opt.letter}
                   </span>
-                  <span className="font-bold text-slate-400">→</span>
-                  <span className="rounded-lg bg-emerald-500/20 px-2.5 py-1 font-bold text-emerald-700 dark:text-emerald-300">
-                    {currentCard.correctPhrase}
-                  </span>
-                </div>
-              )}
+                  <span className="text-xs sm:text-sm leading-snug">{opt.text}</span>
+                </button>
+              );
+            })}
+          </div>
 
-              {currentCard.isCorrect && (
-                <div className="mt-3 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs sm:text-sm font-bold text-emerald-800 dark:text-emerald-200">
-                  ✓ Doğru Kanun İfadesi: {currentCard.correctPhrase}
-                </div>
-              )}
-
-              <p className="mt-3 text-xs sm:text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-                {currentCard.explanation}
-              </p>
-            </div>
-          )}
-
-          {/* Alt Gezinme */}
-          <div className="mt-6 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 pt-4">
+          <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
             <button
-              onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
-              disabled={currentIndex === 0}
-              className="inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 transition"
+              type="button"
+              disabled={currentIdx === 0}
+              onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
+              className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold disabled:opacity-40 inline-flex items-center gap-1 cursor-pointer"
             >
-              <ChevronLeft className="h-4 w-4" />
-              Önceki Soru
+              <ChevronLeft className="w-4 h-4" /> Önceki
             </button>
 
-            {currentIndex < totalQuestions - 1 ? (
+            {currentIdx + 1 < session.questions.length ? (
               <button
-                onClick={() => setCurrentIndex((i) => Math.min(totalQuestions - 1, i + 1))}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-500 transition"
+                type="button"
+                onClick={() => setCurrentIdx((i) => i + 1)}
+                className="px-5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer"
               >
-                Sonraki Soru
-                <ChevronRight className="h-4 w-4" />
+                Sonraki <ChevronRight className="w-4 h-4" />
               </button>
             ) : (
               <button
-                onClick={finishExam}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-500 transition"
+                type="button"
+                onClick={() => finishExam(session, elapsedSec)}
+                className="px-5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-extrabold cursor-pointer"
               >
-                <Trophy className="h-4 w-4" />
-                Sınavı Tamamla & Sonucu Gör
+                Karnemi Gör
               </button>
             )}
           </div>
@@ -716,362 +344,292 @@ export const DenemeSinavScreen: React.FC<DenemeSinavScreenProps> = ({
     );
   }
 
-  // ============================================================================
-  // ANA GÖRÜNÜM: 1) DİNAMİK DENEME MERKEZİ | 2) SÜRE & ÇOĞUNLUK ATLASI
-  // ============================================================================
-  return (
-    <div className="space-y-6 pb-8">
-      {/* Üst Sekme Seçici */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-sm">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-bold text-indigo-600 dark:text-indigo-400">
-            <Sparkles className="h-3.5 w-3.5" />
-            EZBER BOZUCU DİNAMİK SİMÜLASYON & MEVZUAT ATLASI
+  // Finished Exam Report
+  if (session && session.isFinished) {
+    let correct = 0;
+    let wrong = 0;
+    let blank = 0;
+    session.questions.forEach((q) => {
+      const a = session.answers[q.id];
+      if (!a) blank++;
+      else if (a === q.correctOption) correct++;
+      else wrong++;
+    });
+    const score = Math.round((correct / Math.max(1, session.questions.length)) * 100);
+    const passed = score >= 70;
+
+    return (
+      <div className="space-y-4">
+        <div
+          className={`rounded-3xl p-5 text-white shadow-lg ${
+            passed
+              ? 'bg-gradient-to-br from-emerald-600 to-teal-700'
+              : 'bg-gradient-to-br from-rose-600 to-indigo-800'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-bold opacity-85">{session.title}</div>
+              <h2 className="font-display font-black text-2xl mt-1">
+                {score} Puan • {passed ? '70 Barajını Geçtin!' : '70 Barajı Altı — Tekrar Gerekli'}
+              </h2>
+              <p className="text-xs opacity-90 mt-1">
+                Doğru: {correct} • Yanlış: {wrong} • Boş: {blank} • Süre: {formatTime(elapsedSec)}
+              </p>
+            </div>
+            <Trophy className="w-10 h-10 text-amber-300 shrink-0" />
           </div>
-          <h1 className="mt-2 text-xl sm:text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            HMGS Deneme Sınavı & Kritik Süre Atlası
-          </h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-            Her deneme sınavı {cards.length} özgün kanun önermesi arasından tekrar etmeyecek şekilde dinamik üretilir; aynı maddenin farklı varyantları ezberi bozmak için rastgele seçilir.
-          </p>
+          <button
+            type="button"
+            onClick={() => setSession(null)}
+            className="mt-4 px-4 py-2 rounded-xl bg-white text-slate-900 text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Yeni Deneme Seç
+          </button>
         </div>
 
-        <div className="flex w-full sm:w-auto rounded-2xl bg-slate-100 dark:bg-slate-800 p-1">
-          <button
-            onClick={() => setSubView('deneme')}
-            className={`flex-1 sm:flex-none justify-center inline-flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2.5 text-xs font-extrabold transition whitespace-nowrap ${
-              subView === 'deneme'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-            }`}
-          >
-            <Timer className="h-4 w-4" />
-            Deneme Sınavı
-          </button>
-          <button
-            onClick={() => setSubView('atlas')}
-            className={`flex-1 sm:flex-none justify-center inline-flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2.5 text-xs font-extrabold transition whitespace-nowrap ${
-              subView === 'atlas'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-            }`}
-          >
-            <BookOpen className="h-4 w-4" />
-            Mevzuat Atlası ({ALL_HMGS_STATUTORY_RULES.length})
-          </button>
+        <div className="space-y-2.5">
+          <h3 className="font-display font-extrabold text-sm text-slate-900 dark:text-white">
+            Soru Soru Çözüm İncelemesi
+          </h3>
+          {session.questions.map((q, i) => {
+            const ans = session.answers[q.id];
+            const ok = ans === q.correctOption;
+            return (
+              <div
+                key={q.id}
+                className="rounded-2xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 p-3.5 space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold text-indigo-600 dark:text-indigo-400">
+                    #{i + 1} • {q.branchName} ({q.articleRef})
+                  </span>
+                  {ok ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Doğru ({q.correctOption})
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600">
+                      <XCircle className="w-3.5 h-3.5" /> Senin: {ans || 'Boş'} • Doğru: {q.correctOption}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs font-semibold text-slate-900 dark:text-white">{q.stem}</p>
+                <p className="text-[11.5px] text-slate-600 dark:text-slate-300">{q.legalReasoning}</p>
+              </div>
+            );
+          })}
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* SubView Toggle */}
+      <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-slate-200/80 dark:bg-slate-800/80">
+        <button
+          type="button"
+          onClick={() => setSubView('deneme')}
+          className={`py-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+            subView === 'deneme'
+              ? 'bg-white dark:bg-slate-950 text-indigo-600 dark:text-indigo-300 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400'
+          }`}
+        >
+          <Timer className="w-4 h-4" /> Süreli Deneme Sınavları
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubView('atlas')}
+          className={`py-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+            subView === 'atlas'
+              ? 'bg-white dark:bg-slate-950 text-indigo-600 dark:text-indigo-300 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" /> Süreler &amp; 2026 Mevzuat Atlası
+        </button>
       </div>
 
       {subView === 'deneme' ? (
-        <div className="space-y-6">
-          {/* Hazır Sınav Paketleri */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
               {
-                id: 'quick-15' as ExamPresetId,
-                badge: 'HIZLI PRATİK • 12 DAKİKA',
-                title: '15 Soruluk Hızlı Tuzak Taraması',
-                desc: 'Henüz çözmediğin veya daha önce yanıldığın kanun maddelerine öncelik vererek 15 soruluk dinamik mini sınav oluşturur.',
-                stats: `Havuzda ${unsolvedTotalCount} çözülmemiş önerme hazır`
+                id: 'quick-15' as PresetId,
+                title: 'Hızlı Karma Deneme (15 Soru)',
+                desc: '14 branştan karma 5 şıklı hızlı sınav provası (20 Dk)',
+                free: true,
+                badge: 'ÜCRETSİZ'
               },
               {
-                id: 'full-40' as ExamPresetId,
-                badge: '70 PUAN BARAJ PROVASI • 35 DAKİKA',
-                title: '40 Soruluk Kapsamlı HMGS Denemesi',
-                desc: '14 HMGS hukuk dalının tamamından (Medeni, Borçlar, HMK, CMK, TCK, İYUK, İdare, Anayasa, Ticaret, İcra, İş, Vergi, Avukatlık, MÖHUK) dengeli prova.',
-                stats: 'Aynı maddenin iki varyantı aynı sınavda asla çakışmaz'
+                id: 'hmgs-40' as PresetId,
+                title: 'HMGS 2026 Tam Prova (40 Soru)',
+                desc: 'ÖSYM 70 puan barajlı kapsamlı HMGS simülasyonu (55 Dk)',
+                free: false,
+                badge: 'HMGS PRO'
               },
               {
-                id: 'traps-25' as ExamPresetId,
-                badge: '7499 S.K. & SÜRELER • 20 DAKİKA',
-                title: '25 Soruluk Kritik Süre & Çoğunluk Denemesi',
-                desc: 'İstinaf/temyiz iki hafta reformu, İYUK 30/60 gün, İİK 5/7/10 gün ve TBMM nitelikli çoğunluk tuzaklarına özel odaklanır.',
-                stats: 'ÖSYM’nin en çok elediği sayısal tuzaklar'
+                id: 'iyos-30' as PresetId,
+                title: 'İYÖS İdari Yargı Provası (30 Soru)',
+                desc: 'Anayasa, İdare, İYUK, Vergi ve MÖHUK odaklı deneme (40 Dk)',
+                free: false,
+                badge: 'İYÖS PRO'
               },
               {
-                id: 'custom' as ExamPresetId,
-                badge: 'KİŞİSELLEŞTİRİLMİŞ • ÖZEL FİLTRE',
-                title: 'Branş & Tuzak Türüne Göre Özel Deneme',
-                desc: 'İstediğin hukuk dalını, tuzak kategorisini ve soru sayısını (10 - 50 soru) seçerek kendi dinamik denemeni oluştur.',
-                stats: 'Tamamen dinamik soru seçimi'
+                id: 'hakimlik-40' as PresetId,
+                title: 'Adli & İdari Hakimlik (40 Soru)',
+                desc: 'Hakim ve Savcı Yardımcılığı zorluk düzeyinde vaka sınavı (55 Dk)',
+                free: false,
+                badge: 'HAKİMLİK PRO'
+              },
+              {
+                id: 'kpss-30' as PresetId,
+                title: 'KPSS A Grubu Hukuk (30 Soru)',
+                desc: 'Anayasa, İdare, Medeni, Borçlar, Ceza, Ticaret ve İcra (40 Dk)',
+                free: false,
+                badge: 'KPSS PRO'
               }
-            ].map((item) => {
-              const active = selectedPreset === item.id;
+            ].map((p) => {
+              const locked = !isPro && !p.free;
               return (
                 <button
-                  key={item.id}
+                  key={p.id}
                   type="button"
-                  onClick={() => setSelectedPreset(item.id)}
-                  className={`text-left rounded-3xl border-2 p-5 sm:p-6 transition ${
-                    active
-                      ? 'border-indigo-600 bg-indigo-500/5 dark:bg-indigo-500/10 shadow-lg shadow-indigo-500/10'
-                      : 'border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-indigo-400/50'
-                  }`}
+                  onClick={() => startPreset(p.id)}
+                  className="rounded-3xl bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-slate-800 p-4 text-left hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between gap-3 shadow-2xs"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="rounded-full bg-indigo-500/10 px-3 py-1 text-[11px] font-extrabold text-indigo-600 dark:text-indigo-400">
-                      {item.badge}
-                    </span>
                     <span
-                      className={`h-5 w-5 rounded-full border-2 flex items-center justify-center ${
-                        active ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold ${
+                        p.free
+                          ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300'
                       }`}
                     >
-                      {active && <CheckCircle2 className="h-3.5 w-3.5" />}
+                      {p.badge}
                     </span>
+                    {locked ? (
+                      <Lock className="w-4 h-4 text-amber-500" />
+                    ) : (
+                      <Play className="w-4 h-4 text-indigo-600" />
+                    )}
                   </div>
-                  <h3 className="mt-3 text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
-                    {item.title}
-                  </h3>
-                  <p className="mt-1.5 text-xs sm:text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                    {item.desc}
-                  </p>
-                  <div className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                    <Target className="h-3.5 w-3.5" />
-                    {item.stats}
+                  <div>
+                    <div className="font-display font-extrabold text-sm text-slate-900 dark:text-white">
+                      {p.title}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{p.desc}</p>
                   </div>
                 </button>
               );
             })}
           </div>
 
-          {/* Özel Deneme Seçildiyse Parametreler */}
-          {selectedPreset === 'custom' && (
-            <div className="rounded-3xl border border-indigo-500/30 bg-indigo-500/5 dark:bg-slate-900 p-5 sm:p-6 space-y-4">
-              <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">
-                Özel Deneme Parametreleri
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
-                    Hukuk Branşı
-                  </label>
-                  <select
-                    value={customBranch}
-                    onChange={(e) => setCustomBranch(e.target.value as FilterPillCategory)}
-                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2.5 text-xs font-bold text-slate-800 dark:text-slate-100"
-                  >
-                    {FILTER_PILLS.map((pill) => (
-                      <option key={pill} value={pill}>
-                        {pill}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
-                    Tuzak Türü
-                  </label>
-                  <select
-                    value={customTrapType}
-                    onChange={(e) => setCustomTrapType(e.target.value as TrapCategory | 'Tümü')}
-                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2.5 text-xs font-bold text-slate-800 dark:text-slate-100"
-                  >
-                    <option value="Tümü">Tüm Tuzak Türleri + Doğru Metinler</option>
-                    <option value="Süre Tuzağı">Süre Tuzağı</option>
-                    <option value="Görev/Yetki Tuzağı">Görev/Yetki Tuzağı</option>
-                    <option value="Çoğunluk Tuzağı">Çoğunluk Tuzağı</option>
-                    <option value="İstisna/Kesinlik Tuzağı">İstisna/Kesinlik Tuzağı</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
-                    Soru Sayısı: {customCount} Soru
-                  </label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[10, 20, 30, 50].map((num) => (
-                      <button
-                        key={num}
-                        type="button"
-                        onClick={() => setCustomCount(num)}
-                        className={`rounded-xl py-2 text-xs font-extrabold border transition ${
-                          customCount === num
-                            ? 'bg-indigo-600 text-white border-indigo-600'
-                            : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        {num}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+          {/* Custom Exam Builder */}
+          <div className="rounded-3xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="font-display font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-500" /> Özel Branş Denemesi Oluştur
               </div>
+              {!isPro && <Lock className="w-4 h-4 text-amber-500" />}
             </div>
-          )}
 
-          {/* Sınav Modu & Başlatma Çubuğu */}
-          <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-sm">
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-600 dark:text-slate-400">
-                  Çözüm Gösterimi:
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFeedbackMode((m) => (m === 'instant' ? 'end-of-exam' : 'instant'))
-                  }
-                  className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-xs font-extrabold text-indigo-600 dark:text-indigo-400"
-                >
-                  {feedbackMode === 'instant'
-                    ? '⚡ Anında Açıklamalı Mod'
-                    : '🎯 Gerçek Sınav Modu (Sonuçta Göster)'}
-                </button>
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <select
+                value={customBranch}
+                onChange={(e) => setCustomBranch(e.target.value as 'ALL' | LegalBranchId)}
+                className="rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+              >
+                <option value="ALL">Tüm 14 Branş Karma</option>
+                {LEGAL_BRANCHES.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
 
-              <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={prioritizeUnsolved}
-                  onChange={(e) => setPrioritizeUnsolved(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                Çözülmemiş ve yanlış yapılan sorulara öncelik ver (Ezber Bozucu)
-              </label>
+              <select
+                value={customCount}
+                onChange={(e) => setCustomCount(Number(e.target.value))}
+                className="rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+              >
+                {[10, 20, 30, 50].map((n) => (
+                  <option key={n} value={n}>
+                    {n} Soru
+                  </option>
+                ))}
+              </select>
             </div>
 
             <button
               type="button"
-              onClick={handleStartPreset}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3.5 text-sm font-black text-white shadow-xl shadow-indigo-600/25 transition"
+              onClick={() => startPreset('custom')}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-extrabold cursor-pointer"
             >
-              <Play className="h-4 w-4 fill-current" />
-              Dinamik Deneme Sınavını Başlat
+              Özel Denemeyi Başlat
             </button>
           </div>
         </div>
       ) : (
-        /* ============================================================================
-           İNTERAKTİF HMGS SÜRE, GÖREV & NİTELİKLİ ÇOĞUNLUK ATLASI
-           ============================================================================ */
-        <div className="space-y-5">
-          {/* Arama ve Branş Filtreleri */}
-          <div className="rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="relative flex-1">
-                <Search className="h-4 w-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={atlasSearch}
-                  onChange={(e) => setAtlasSearch(e.target.value)}
-                  placeholder="Madde numarası, süre veya kavram ara (örn: iki hafta, 7499, konkordato, Yüce Divan, önalım)..."
-                  className="w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <select
-                value={atlasTrapFilter}
-                onChange={(e) => setAtlasTrapFilter(e.target.value as TrapCategory | 'Tümü')}
-                className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-xs font-bold text-slate-800 dark:text-slate-200"
-              >
-                <option value="Tümü">Tüm Tuzak Kategorileri</option>
-                <option value="Süre Tuzağı">Süre Tuzağı</option>
-                <option value="Görev/Yetki Tuzağı">Görev/Yetki Tuzağı</option>
-                <option value="Çoğunluk Tuzağı">Çoğunluk Tuzağı</option>
-                <option value="İstisna/Kesinlik Tuzağı">İstisna/Kesinlik Tuzağı</option>
-              </select>
-
-              <button
-                type="button"
-                onClick={() =>
-                  startExam(
-                    `${atlasBranch} • Atlas Özel Testi (15 Soru)`,
-                    15,
-                    12,
-                    atlasBranch,
-                    atlasTrapFilter
-                  )
-                }
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-xs font-extrabold text-white shrink-0 transition"
-              >
-                <Play className="h-3.5 w-3.5" />
-                Bu Filtreden 15 Soru Çöz
-              </button>
+        /* Mevzuat Süreler & 2026 Yargı Paketi Atlası */
+        <div className="space-y-3">
+          <div className="rounded-3xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 p-3 space-y-2.5">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={atlasSearch}
+                onChange={(e) => setAtlasSearch(e.target.value)}
+                placeholder="Süre, mahkeme, nisap veya Yargı Paketi ara..."
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 text-xs text-slate-900 dark:text-white outline-none"
+              />
             </div>
-
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-              {FILTER_PILLS.map((pill) => (
-                <button
-                  key={pill}
-                  onClick={() => setAtlasBranch(pill)}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-bold shrink-0 transition ${
-                    atlasBranch === pill
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                  }`}
-                >
-                  {pill}
-                </button>
-              ))}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              {['Tümü', '2024–2026 Yargı Paketi', 'Süreler', 'Görevli Mahkemeler', 'Nisap & Çoğunluklar', 'Karşılaştırma'].map(
+                (cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setAtlasCategory(cat)}
+                    className={`px-3 py-1 rounded-full text-[11px] font-bold whitespace-nowrap cursor-pointer ${
+                      atlasCategory === cat
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                )
+              )}
             </div>
           </div>
 
-          {/* Kural Kartları Listesi */}
-          <div className="grid grid-cols-1 gap-4">
-            {filteredAtlasRules.map((rule) => (
+          <div className="space-y-2.5">
+            {filteredAtlas.map((item) => (
               <div
-                key={rule.id}
-                className="rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6 shadow-sm"
+                key={item.id}
+                className="rounded-2xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 p-4 space-y-2"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-xl bg-indigo-500/10 px-3 py-1 text-xs font-extrabold text-indigo-600 dark:text-indigo-400">
-                      {rule.branch} • {rule.articleRef}
-                    </span>
-                    <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-                      {rule.subTopic}
-                    </h3>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="rounded-lg bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-bold text-amber-600 dark:text-amber-400">
-                      {rule.trap1.category}
-                    </span>
-                    {rule.trap2.category !== rule.trap1.category && (
-                      <span className="rounded-lg bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-bold text-rose-600 dark:text-rose-400">
-                        {rule.trap2.category}
-                      </span>
-                    )}
-                  </div>
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-[10.5px] font-extrabold">
+                    {item.category}
+                  </span>
+                  <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                    {item.articleRef}
+                  </span>
                 </div>
-
-                {/* Doğru Kanun Hükmü Özeti */}
-                <div className="mt-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 p-3.5">
-                  <div className="text-[11px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
-                    ✓ DOĞRU KANUN KURALI (ANAHTAR HÜKÜM)
-                  </div>
-                  <p className="mt-1 text-xs sm:text-sm font-bold text-emerald-950 dark:text-emerald-100">
-                    {rule.trueCorrectPhrase}
-                  </p>
-                </div>
-
-                {/* ÖSYM'nin Kurduğu 2 Farklı Tuzak Varyantı */}
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 p-3.5">
-                    <div className="text-[11px] font-black uppercase text-rose-600 dark:text-rose-400">
-                      ⚠️ ÖSYM TUZAĞI 1 ({rule.trap1.category})
-                    </div>
-                    <p className="mt-1 text-xs line-through text-rose-700/80 dark:text-rose-300/80">
-                      “{rule.trap1.wrongPhrase}”
-                    </p>
-                    <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-400">
-                      {rule.trap1.explanation}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3.5">
-                    <div className="text-[11px] font-black uppercase text-amber-600 dark:text-amber-400">
-                      ⚠️ ÖSYM TUZAĞI 2 ({rule.trap2.category})
-                    </div>
-                    <p className="mt-1 text-xs line-through text-amber-700/80 dark:text-amber-300/80">
-                      “{rule.trap2.wrongPhrase}”
-                    </p>
-                    <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-400">
-                      {rule.trap2.explanation}
-                    </p>
-                  </div>
-                </div>
+                <h3 className="font-display font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Scale className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <span>{item.title}</span>
+                </h3>
+                <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+                  <strong>Güncel Kural:</strong> {item.correctRule}
+                </p>
+                <p className="text-[11.5px] text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/30 rounded-xl px-3 py-2 border border-rose-200/70 dark:border-rose-500/20">
+                  <strong>ÖSYM Tuzağı:</strong> {item.commonTrap}
+                </p>
               </div>
             ))}
           </div>
